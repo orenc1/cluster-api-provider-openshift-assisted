@@ -153,6 +153,10 @@ spec:
               agentConfigSpec:
                 description: AgentConfigSpec specs for the AgentConfig
                 properties:
+                  apiVIPs:
+                    items:
+                      type: string
+                    type: array
                   baseDomain:
                     description: Base domain for install cluster
                     type: string
@@ -201,6 +205,23 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                  ingressVIPs:
+                    items:
+                      type: string
+                    type: array
+                  machineNetwork:
+                    items:
+                      description: MachineNetworkEntry is a single IP address block
+                        for node IP blocks.
+                      properties:
+                        cidr:
+                          description: CIDR is the IP block address pool for machines
+                            within the cluster.
+                          type: string
+                      required:
+                      - cidr
+                      type: object
+                    type: array
                   pullSecretRef:
                     description: PullSecretRef references pull secret necessary for
                       the cluster installation

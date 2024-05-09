@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"github.com/pkg/errors"
+	"time"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -37,6 +39,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	bsutil "sigs.k8s.io/cluster-api/bootstrap/util"
 	"sigs.k8s.io/cluster-api/util"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
@@ -74,6 +77,8 @@ func (r *AgentBootstrapConfigReconciler) getMachineTemplate(ctx context.Context,
 // +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls/status,verbs=get
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machines,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=hive.openshift.io,resources=clusterdeployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines;machines/status,verbs=get;list;watch;create;update;patch;delete
@@ -120,6 +125,20 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Look up the owner of this agentbootstrapconfig if there is one
+	configOwner, err := bsutil.GetTypedConfigOwner(ctx, r.Client, config)
+	if apierrors.IsNotFound(err) {
+		// Could not find the owner yet, this is not an error and will rereconcile when the owner gets set.
+		return ctrl.Result{}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, errors.Wrapf(err, "failed to get owner")
+	}
+	if configOwner == nil {
+		return ctrl.Result{}, nil
+	}
+
+	log.Info("found config owner", "name", configOwner.GetName())
 
 	// Attempt to Patch the KubeadmConfig object and status after each reconciliation if no error occurs.
 	defer func() {
@@ -149,9 +168,19 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	}
 	if len(clusterDeployments.Items) != 1 {
 		log.Info("found more or less than 1 cluster deployments. exactly one is needed", "cluster_name", clusterName)
+		// if no ClusterDeployment we should pause this machine?
+		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
 
 	clusterDeployment := clusterDeployments.Items[0]
+	/*aci, err := r.getACIFromClusterDeployment(ctx, &clusterDeployment)
+	if err != nil {
+		log.Info("cluster deployment is not referencing ACI... yet?", "name", clusterDeployment.Name, "namespace", clusterDeployment.Namespace)
+		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, err
+	}
+	*/
+	// IF not installing yet or finished, can deal with the machine
+	// IF installing, requeue
 	infraEnvName, err := getInfraEnvName(config)
 	if err != nil {
 		log.Error(err, "couldn't get infraenv name for agentbootstrapconfig", "name", config.Name)
@@ -245,7 +274,12 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	return ctrl.Result{}, rerr
 }
 
+func (r *AgentBootstrapConfigReconciler) isReferencingACI(clusterDeployment *hivev1.ClusterDeployment) bool {
+	return clusterDeployment.Spec.ClusterInstallRef != nil
+}
+
 func getInfraEnvName(config *bootstrapv1beta1.AgentBootstrapConfig) (string, error) {
+	// this should be based on Infra template instead
 	nameFormat := "%s-%s"
 
 	clusterName, ok := config.Labels[clusterv1.ClusterNameLabel]
@@ -272,7 +306,12 @@ func (r *AgentBootstrapConfigReconciler) SetupWithManager(mgr ctrl.Manager) erro
 		Watches(
 			&clusterv1.Machine{},
 			handler.EnqueueRequestsFromMapFunc(r.FilterMachine),
-		).Complete(r)
+		).
+		Watches(
+			&hivev1.ClusterDeployment{},
+			&handler.EnqueueRequestForObject{},
+		).
+		Complete(r)
 }
 
 // Filter machine owned by this agentbootstrapconfig
@@ -323,3 +362,24 @@ func (r *AgentBootstrapConfigReconciler) createInfraEnv(ctx context.Context, con
 	}
 	return infraEnv, r.Create(ctx, infraEnv)
 }
+
+/*
+func (r *AgentBootstrapConfigReconciler) getACIFromClusterDeployment(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment) (*v1beta1.AgentClusterInstall, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	if !r.isReferencingACI(clusterDeployment) {
+		return nil, errors.Errorf("clusterDeployment not referencing agentClusterInstall")
+	}
+	aciNamespacedName := types.NamespacedName{
+		Name:      clusterDeployment.Spec.ClusterInstallRef.Name,
+		Namespace: clusterDeployment.Namespace,
+	}
+	aci := &v1beta1.AgentClusterInstall{}
+	err := r.Get(ctx, aciNamespacedName, aci)
+	if err != nil {
+		log.Info("error while getting agentClusterInstall", "error", err)
+		return nil, err
+	}
+	return aci, nil
+}
+*/

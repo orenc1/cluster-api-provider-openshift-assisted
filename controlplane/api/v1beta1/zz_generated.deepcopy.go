@@ -21,6 +21,7 @@ limitations under the License.
 package v1beta1
 
 import (
+	hiveextensionv1beta1 "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
@@ -66,6 +67,21 @@ func (in *AgentControlPlaneConfigSpec) DeepCopyInto(out *AgentControlPlaneConfig
 		in, out := &in.ClusterDeploymentRef, &out.ClusterDeploymentRef
 		*out = new(corev1.ObjectReference)
 		**out = **in
+	}
+	if in.APIVIPs != nil {
+		in, out := &in.APIVIPs, &out.APIVIPs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.IngressVIPs != nil {
+		in, out := &in.IngressVIPs, &out.IngressVIPs
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.MachineNetwork != nil {
+		in, out := &in.MachineNetwork, &out.MachineNetwork
+		*out = make([]hiveextensionv1beta1.MachineNetworkEntry, len(*in))
+		copy(*out, *in)
 	}
 }
 

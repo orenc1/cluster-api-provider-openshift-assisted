@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	bootstrapv1beta1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1beta1"
+	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -85,7 +86,10 @@ type AgentControlPlaneConfigSpec struct {
 	// Base domain for install cluster
 	BaseDomain string `json:"baseDomain"`
 
-	ReleaseImage string `json:"releaseImage"`
+	APIVIPs        []string                      `json:"apiVIPs,omitempty"`
+	IngressVIPs    []string                      `json:"ingressVIPs,omitempty"`
+	MachineNetwork []hiveext.MachineNetworkEntry `json:"machineNetwork,omitempty"`
+	ReleaseImage   string                        `json:"releaseImage"`
 }
 
 // AgentControlPlaneStatus defines the observed state of AgentControlPlane

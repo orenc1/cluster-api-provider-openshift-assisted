@@ -76,7 +76,8 @@ func (r *InfraEnvReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	for _, agentBootstrapConfig := range agentBootstrapConfigs.Items {
 		if agentBootstrapConfig.Spec.InfraEnvRef.Name != infraEnv.Name {
 			log.Info("InfraEnvRef on agentbootstrap config doesn't match infraenv found", "agentBootstrap.InfraEnvRef", agentBootstrapConfig.Spec.InfraEnvRef.Name, "infra env", infraEnv.Name)
-			return ctrl.Result{}, nil
+			//
+			continue
 		}
 		log.Info("Adding ISO URL to AgentBootstrapConfig", "ISO URL", infraEnv.Status.ISODownloadURL, "agent_bootstrap_config", agentBootstrapConfig.Name)
 		// Add ISO to agentBootstrapConfig status
