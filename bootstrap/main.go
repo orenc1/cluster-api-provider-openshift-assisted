@@ -19,8 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	"os"
+
+	hivev1 "github.com/openshift/hive/apis/hive/v1"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -35,7 +36,9 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	bmh_v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	metal3 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
+	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
@@ -56,6 +59,8 @@ func init() {
 	utilruntime.Must(bootstrapv1beta1.AddToScheme(scheme))
 	utilruntime.Must(aiv1beta1.AddToScheme(scheme))
 	utilruntime.Must(hivev1.AddToScheme(scheme))
+	utilruntime.Must(hiveext.AddToScheme(scheme))
+	utilruntime.Must(bmh_v1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
@@ -149,6 +154,13 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
+		os.Exit(1)
+	}
+	if err = (&controller.AgentClusterInstallReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AgentClusterInstall")
 		os.Exit(1)
 	}
 	//+kubebuilder:scaffold:builder

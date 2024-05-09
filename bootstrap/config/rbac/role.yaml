@@ -96,6 +96,24 @@ rules:
   - update
   - watch
 - apiGroups:
+  - extensions.hive.openshift.io
+  resources:
+  - agentclusterinstalls
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - extensions.hive.openshift.io
+  resources:
+  - agentclusterinstalls/status
+  verbs:
+  - get
+- apiGroups:
   - hive.openshift.io
   resources:
   - clusterdeployments
@@ -107,10 +125,32 @@ rules:
   - infrastructure.cluster.x-k8s.io
   resources:
   - metal3machines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - metal3machines
   - metal3machines/status
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - metal3.io
+  resources:
+  - baremetalhosts
+  verbs:
   - get
   - list
   - patch
