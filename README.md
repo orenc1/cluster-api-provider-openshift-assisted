@@ -1,16 +1,39 @@
-# cluster-api-agent
-// TODO(user): Add simple overview of use/purpose
+# Cluster API OpenShift Agent providers
+
+OpenShift Agent providers are a pair of CAPI providers, bootstrap and controlplane, which objective
+is to install OpenShift on BareMetal.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+OpenShift Agent providers install OpenShift on BareMetal without the need of a bootstrap node.
+To achieve this feature, the providers are using Assisted Installer ZTP flow behind the scenes.
 
 ## Getting Started
+
+### Supported Infrastructure Providers
+* [CAPM3](https://github.com/metal3-io/cluster-api-provider-metal3)
 
 ### Prerequisites
 - go version v1.21.0+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.
+
+### Installation
+To configure clusterctl with the OpenShift Agent providers, edit `~/.cluster-api/clusterctl.yaml` and add the following:
+
+```yaml
+  - name: "openshift-agent"
+    url: "https://github.com/openshift-assisted/cluster-api-agent/releases/latest/download/bootstrap-components.yaml"
+    type: "BootstrapProvider"
+  - name: "openshift-agent"
+    url: "https://github.com/openshift-assisted/cluster-api-agent/releases/latest/download/controlplane-components.yaml"
+    type: "ControlPlaneProvider"
+```
+
+After this we will be able to initialize clusterctl:
+```bash
+clusterctl init --bootstrap openshift-agent --control-plane openshift-agent -i  metal3:v1.7.0
+```
 
 ### To Deploy on the cluster
 **Build and push your image to the location specified by `IMG`:**
