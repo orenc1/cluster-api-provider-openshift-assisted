@@ -93,9 +93,6 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	defer func() {
-		if rerr = r.Client.Update(ctx, acp); rerr != nil {
-			log.Error(rerr, "couldn't update AgentControlPlane", "name", acp.Name, "namespace", acp.Namespace)
-		}
 		if rerr = r.Client.Status().Update(ctx, acp); rerr != nil {
 			log.Error(rerr, "couldn't update AgentControlPlane Status", "name", acp.Name, "namespace", acp.Namespace)
 		}
@@ -139,6 +136,10 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				Namespace:  clusterDeployment.Namespace,
 				Kind:       "ClusterDeployment",
 				APIVersion: hivev1.SchemeGroupVersion.String(),
+			}
+			if err = r.Client.Update(ctx, acp); err != nil {
+				log.Error(rerr, "couldn't update AgentControlPlane", "name", acp.Name, "namespace", acp.Namespace)
+				return ctrl.Result{}, err
 			}
 		}
 	}

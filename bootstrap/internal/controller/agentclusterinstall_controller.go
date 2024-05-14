@@ -188,12 +188,6 @@ func (r *AgentClusterInstallReconciler) labelWorkloadClusterNodes(ctx context.Co
 			log.Error(err, "error trying to update machine", "op", op, "machine", machine.Name)
 			return err
 		}
-		log.Info("set providerID successfully", "op", op, "machine", machine.Name)
-		if err := r.setNodeMetadata(ctx, targetClient, node, machine, bmhUID); err != nil {
-			log.Info("could not set node metadata", "name", node.Name)
-		} else {
-			log.Info("set node metadata", "name", node.Name)
-		}
 	}
 	return nil
 }
