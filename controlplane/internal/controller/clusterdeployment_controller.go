@@ -19,13 +19,13 @@ package controller
 import (
 	"context"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1beta1"
+	v1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	"sigs.k8s.io/cluster-api/util"
@@ -46,6 +46,7 @@ func (r *ClusterDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&hivev1.ClusterDeployment{}).
 		Watches(&v1beta1.AgentControlPlane{}, &handler.EnqueueRequestForObject{}).
+		Watches(&clusterv1.MachineDeployment{}, &handler.EnqueueRequestForObject{}).
 		Complete(r)
 }
 func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -111,7 +112,14 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(ctx context.Cont
 	if imageSet == nil {
 		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
-
+	workerNodes := r.getWorkerNodesCount(ctx, cluster)
+	aci, err := r.createOrUpdateAgentClusterInstall(ctx, clusterDeployment, acp, cluster, imageSet, workerNodes)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if aci == nil {
+		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
+	}
 	if clusterDeployment.Spec.ClusterInstallRef != nil {
 		log.Info(
 			"skipping reconciliation: cluster deployment already has a referenced agent cluster install",
@@ -121,17 +129,24 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(ctx context.Cont
 		)
 		return ctrl.Result{}, nil
 	}
-	aci, err := r.createOrUpdateAgentClusterInstall(ctx, clusterDeployment, acp, cluster, imageSet)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if aci == nil {
-		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
-	}
-
 	err = r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
 
 	return ctrl.Result{}, err
+}
+
+func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, cluster *clusterv1.Cluster) int {
+	log := ctrl.LoggerFrom(ctx)
+
+	mdList := clusterv1.MachineDeploymentList{}
+	if err := r.Client.List(ctx, &mdList, client.MatchingLabels{clusterv1.ClusterNameLabel: cluster.Name}); err != nil {
+		log.Error(err, "failed to list MachineDeployments", "cluster", cluster.Name)
+		return 0
+	}
+	count := 0
+	for _, md := range mdList.Items {
+		count += int(*md.Spec.Replicas)
+	}
+	return count
 }
 
 func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(ctx context.Context, cd *hivev1.ClusterDeployment, aci *hiveext.AgentClusterInstall) error {
@@ -189,7 +204,7 @@ func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.Cl
 	}
 }
 
-func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment, acp v1beta1.AgentControlPlane, cluster *clusterv1.Cluster, imageSet *hivev1.ClusterImageSet) (*hiveext.AgentClusterInstall, error) {
+func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment, acp v1beta1.AgentControlPlane, cluster *clusterv1.Cluster, imageSet *hivev1.ClusterImageSet, workerNodes int) (*hiveext.AgentClusterInstall, error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	aci := &hiveext.AgentClusterInstall{}
@@ -202,7 +217,7 @@ func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx cont
 			return nil, err
 		}
 		log.Info("creating agent cluster install for ClusterDeployment", "name", clusterDeployment.Name, "namespace", clusterDeployment.Namespace)
-		aci = computeAgentClusterInstall(clusterDeployment, acp, imageSet, cluster)
+		aci = computeAgentClusterInstall(clusterDeployment, acp, imageSet, cluster, workerNodes)
 		if err := r.Client.Create(ctx, aci); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				log.Info("failed to create agent cluster install for ClusterDeployment", "name", clusterDeployment.Name, "namespace", clusterDeployment.Namespace)
@@ -220,7 +235,7 @@ func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx cont
 	return aci, nil
 }
 
-func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp v1beta1.AgentControlPlane, imageSet *hivev1.ClusterImageSet, cluster *clusterv1.Cluster) *hiveext.AgentClusterInstall {
+func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp v1beta1.AgentControlPlane, imageSet *hivev1.ClusterImageSet, cluster *clusterv1.Cluster, workerReplicas int) *hiveext.AgentClusterInstall {
 	var clusterNetwork []hiveext.ClusterNetworkEntry
 
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Pods != nil {
@@ -232,7 +247,8 @@ func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Services != nil {
 		serviceNetwork = cluster.Spec.ClusterNetwork.Services.CIDRBlocks
 	}
-	return &hiveext.AgentClusterInstall{
+
+	aci := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterDeployment.Name,
 			Namespace: clusterDeployment.Namespace,
@@ -242,20 +258,34 @@ func computeAgentClusterInstall(clusterDeployment *hivev1.ClusterDeployment, acp
 			},
 		},
 		Spec: hiveext.AgentClusterInstallSpec{
-			// TODO: fix this stuff below
-			APIVIP:               acp.Spec.AgentConfigSpec.APIVIPs[0],
-			IngressVIP:           acp.Spec.AgentConfigSpec.IngressVIPs[0],
 			ClusterDeploymentRef: corev1.LocalObjectReference{Name: clusterDeployment.Name},
 			ProvisionRequirements: hiveext.ProvisionRequirements{
 				ControlPlaneAgents: int(acp.Spec.Replicas),
+				WorkerAgents:       workerReplicas,
 			},
 			SSHPublicKey: acp.Spec.AgentConfigSpec.SSHAuthorizedKey,
 			ImageSetRef:  &hivev1.ClusterImageSetReference{Name: imageSet.Name},
 			Networking: hiveext.Networking{
-				ClusterNetwork: clusterNetwork,
-				ServiceNetwork: serviceNetwork,
-				MachineNetwork: acp.Spec.AgentConfigSpec.MachineNetwork,
+				UserManagedNetworking: acp.Spec.AgentConfigSpec.UserManagedNetworking,
+				ClusterNetwork:        clusterNetwork,
+				ServiceNetwork:        serviceNetwork,
+				MachineNetwork:        acp.Spec.AgentConfigSpec.MachineNetwork,
 			},
 		},
 	}
+	if aci.Spec.Networking.UserManagedNetworking != nil && *aci.Spec.Networking.UserManagedNetworking {
+		aci.Spec.PlatformType = hiveext.PlatformType(v1.NonePlatformType)
+		return aci
+	}
+
+	// not user managed networking: need APIVIP
+	// TODO: make field mutually exclusive (usermanagednetworking and APIVIPS & INGRESSVIPS)
+	// TODO: for older openshift version use only singular, for newer can use plural
+	if len(acp.Spec.AgentConfigSpec.APIVIPs) > 0 {
+		aci.Spec.APIVIP = acp.Spec.AgentConfigSpec.APIVIPs[0]
+	}
+	if len(acp.Spec.AgentConfigSpec.IngressVIPs) > 0 {
+		aci.Spec.IngressVIP = acp.Spec.AgentConfigSpec.IngressVIPs[0]
+	}
+	return aci
 }

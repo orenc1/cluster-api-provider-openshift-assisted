@@ -174,8 +174,6 @@ github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1 h1:K6RDEckDVWvDI9JAJY
 github.com/google/pprof v0.0.0-20210720184732-4bb14d4b1be1/go.mod h1:kpwsk12EmLew5upagYY7GY0pfYCcupk39gWOCRROcvE=
 github.com/google/uuid v1.1.1/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/google/uuid v1.1.2/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/google/uuid v1.4.0 h1:MtMxsa51/r9yyhkyLsVeVt0B+BGQZzpQiTQ4eHZ8bc4=
-github.com/google/uuid v1.4.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/googleapis/gnostic v0.5.1/go.mod h1:6U4PtQXGIEt/Z3h5MAT7FNofLnw9vXk2cUuW7uA/OeU=
@@ -226,8 +224,10 @@ github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0 h1:jWpvCLoY8Z/e3VKvls
 github.com/matttproud/golang_protobuf_extensions/v2 v2.0.0/go.mod h1:QUyp042oQthUoa9bqDv0ER0wrtXnBruoNd7aNjkbP+k=
 github.com/metal3-io/baremetal-operator/apis v0.6.0 h1:YYQ8GeP0fp9bsL8S5WMAgc1wwW8K/yx+RyToAn4tnaM=
 github.com/metal3-io/baremetal-operator/apis v0.6.0/go.mod h1:dogSrgg9iPAznQonugPKRI41zOlQAaPb80U5WJ06E38=
-github.com/metal3-io/baremetal-operator/pkg/hardwareutils v0.5.1 h1:X0+MWsJ+Gj/TAkmhGybvesvxk6zQKu3NQXzvC6l0iJs=
-github.com/metal3-io/baremetal-operator/pkg/hardwareutils v0.5.1/go.mod h1:399nvdaqoU9rTI25UdFw2EWcVjmJPpeZPIhfDAIx/XU=
+github.com/metal3-io/baremetal-operator/pkg/hardwareutils v0.6.0 h1:XWmapALCHYhgSU2Quv/mA57yLEGECYBx8ltSEvAW+GM=
+github.com/metal3-io/baremetal-operator/pkg/hardwareutils v0.6.0/go.mod h1:wdkQoDe+Kmien7xXRIUufMeX4FGGpciSLi05kcf+Ig4=
+github.com/metal3-io/cluster-api-provider-metal3 v1.7.0 h1:eK0yIh8YufbpEToVF5XpXg3j9MLZJmIpX/HGtkTIH80=
+github.com/metal3-io/cluster-api-provider-metal3 v1.7.0/go.mod h1:s8OUmDNSSbRIbt6VoDsdeakI+bN2EQebU4RLjnEqQJo=
 github.com/metal3-io/cluster-api-provider-metal3/api v1.7.0 h1:9ALpFlMFacUTCZVChphg49xU/urSB+vvlAlxuICWLqU=
 github.com/metal3-io/cluster-api-provider-metal3/api v1.7.0/go.mod h1:c0M3xS4zQxJpHDVNEb53wLdbYa0/kuWJHw6d9a9CjGQ=
 github.com/metal3-io/ip-address-manager/api v1.7.0 h1:ie9SQPWDWTjBnnxnG+qSfoqIOs+4vp5k0tVI+/0HNGo=
@@ -339,8 +339,8 @@ github.com/stretchr/testify v1.7.0/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/
 github.com/stretchr/testify v1.7.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
 github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO+kdMU+MU=
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
-github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
-github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
+github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsTg=
+github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/thoas/go-funk v0.9.2 h1:oKlNYv0AY5nyf9g+/GhMgS/UO2ces0QRdPKwkhY3VCk=
 github.com/thoas/go-funk v0.9.2/go.mod h1:+IWnUfUmFO1+WVYQWQtIJHeRRdaIyyYglZN7xzUPe4Q=
 github.com/tidwall/pretty v1.0.0 h1:HsD+QiTn7sK6flMKIvNmpqz1qrpP3Ps6jOKIKMooyg4=
