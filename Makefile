@@ -148,9 +148,14 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
+.PHONY: install-all
+install-all:
+	$(MAKE) install PROVIDER=bootstrap
+	$(MAKE) install PROVIDER=controlplane
+
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
-	$(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
+	cd $(PROVIDER) && $(KUSTOMIZE) build config/crd | $(KUBECTL) apply -f -
 
 .PHONY: uninstall
 uninstall: manifests kustomize ## Uninstall CRDs from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.

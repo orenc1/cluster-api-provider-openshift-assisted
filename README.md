@@ -49,7 +49,7 @@ Make sure you have the proper permission to the registry if the above commands d
 **Install the CRDs into the cluster:**
 
 ```sh
-make install
+make install-all
 ```
 
 **Deploy the Manager to the cluster with the image specified by `IMG`:**
