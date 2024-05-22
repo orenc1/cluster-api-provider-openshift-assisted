@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	bmh_v1alpha1 "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	v1beta12 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
@@ -18,6 +17,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"strings"
 	"time"
+)
+
+const (
+	retryAfter               = 20 * time.Second
+	metal3ProviderIDLabelKey = "metal3.io/uuid"
 )
 
 // AgentReconciler reconciles an Agent object
@@ -43,22 +47,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// if we find an agent, we must ensure it is controlled by our provider
-	clusterDeploymentKey := client.ObjectKey{
-		Namespace: agent.Spec.ClusterDeploymentName.Namespace,
-		Name:      agent.Spec.ClusterDeploymentName.Name,
-	}
-	clusterDeployment := &hivev1.ClusterDeployment{}
-	if err := r.Client.Get(ctx, clusterDeploymentKey, clusterDeployment); err != nil {
-		log.Error(err, "unable to fetch Agent")
+	clusterName, err := r.getClusterName(ctx, agent)
+	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	clusterName, ok := clusterDeployment.Labels[clusterv1.ClusterNameLabel]
-	if !ok {
-		log.Error(err, "clusterdeployment does not belong to a CAPI cluster")
-		return ctrl.Result{}, nil
-	}
 	agentBootstrapConfigList := v1beta1.AgentBootstrapConfigList{}
 	if err := r.Client.List(ctx, &agentBootstrapConfigList, client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName}); err != nil {
 		log.Error(err, "agentboostrapconfig not found for cluster", "cluster", clusterName)
@@ -66,7 +59,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 	if agent.Status.Inventory.Interfaces == nil {
 		log.Info("agent doesn't have interfaces yet", "agent name", agent.Name)
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
 
 	bmh, err := r.getBMHFromAgent(ctx, agent)
@@ -75,10 +68,10 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 	if bmh == nil {
-		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: retryAfter}, nil
 	}
-	bmhUID := string(bmh.GetUID())
-	agent.Spec.NodeLabels = map[string]string{"metal3.io/uuid": bmhUID}
+	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
+
 	machine, err := r.getMachineFromBMH(ctx, bmh)
 	if err != nil {
 		log.Error(err, "can't get bmhs for agent", "cluster", bmh)
@@ -91,54 +84,8 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	log.Info("setting role to agent", "role", role)
 	// TODO: skip if installing
 
-	//	kubeletConfig := getKubeletConfig()
-	/*{
-		"path": "/etc/systemd/system/kubelet.service",
-		"mode": 420,
-		"overwrite": true,
-		"contents": {
-		"source": "data:text/plain;charset=utf-8;base64,%s"
-	}
-	},*/
 	agent.Spec.Role = role
-	content := fmt.Sprintf(`[Service]
-Environment="KUBELET_PROVIDERID=metal3.io/uuid=%s"
-Environment="CUSTOM_KUBELET_LABELS=metal3.io/uuid=%s"
-`,
-		string(bmh.UID),
-		string(bmh.UID),
-	)
-
-	encodedContent := base64.StdEncoding.EncodeToString([]byte(content))
-	//encodedKubeletConfig := base64.StdEncoding.EncodeToString([]byte(kubeletConfig))
-	ignition := fmt.Sprintf(`{
-		"ignition": { "version": "3.1.0" },
-		"storage": {
-			"files": [
-              {
-                "path": "/etc/systemd/system/kubelet.service.d/30-capi-provider-env.conf",
-		        "mode": 420,
-		        "contents": {
-					"source": "data:text/plain;charset=utf-8;base64,%s"
-				}
-		      },
-			  {
-                "path": "/run/cluster-api/bootstrap-success.complete",
-		        "mode": 420,
-		        "contents": {
-					"source": "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw=="
-				}
-		      }
-	        ]
-		}
-	}
-`,
-		//encodedKubeletConfig,
-		encodedContent,
-	)
-	log.Info("setting ignition override to agent", "ignition", ignition)
-
-	agent.Spec.IgnitionConfigOverrides = ignition
+	agent.Spec.IgnitionConfigOverrides = getIngitionConfigOverride()
 	agent.Spec.Approved = true
 	if err := r.Client.Update(ctx, agent); err != nil {
 		log.Error(err, "couldn't update agent", "name", agent.Name, "namespace", agent.Namespace)
@@ -147,49 +94,45 @@ Environment="CUSTOM_KUBELET_LABELS=metal3.io/uuid=%s"
 	return ctrl.Result{}, nil
 }
 
-func getKubeletConfig() string {
-	return `[Unit]
-Description=Kubernetes Kubelet
-Requires=crio.service kubelet-dependencies.target
-After=kubelet-dependencies.target
-After=ostree-finalize-staged.service
+func getProviderID(bmh *bmh_v1alpha1.BareMetalHost) string {
+	return bmh.Namespace + "/" + bmh.Name + "/" + "metal3machinename"
+	return string(bmh.GetUID())
+}
 
-[Service]
-Type=notify
-ExecStartPre=/bin/mkdir --parents /etc/kubernetes/manifests
-ExecStartPre=/bin/rm -f /var/lib/kubelet/cpu_manager_state
-ExecStartPre=/bin/rm -f /var/lib/kubelet/memory_manager_state
-EnvironmentFile=/etc/os-release
-EnvironmentFile=-/etc/kubernetes/kubelet-workaround
-EnvironmentFile=-/etc/kubernetes/kubelet-env
-EnvironmentFile=/etc/node-sizing.env
+func (r *AgentReconciler) getClusterName(ctx context.Context, agent *aiv1beta1.Agent) (string, error) {
+	// if we find an agent, we must ensure it is controlled by our provider
+	clusterDeploymentKey := client.ObjectKey{
+		Namespace: agent.Spec.ClusterDeploymentName.Namespace,
+		Name:      agent.Spec.ClusterDeploymentName.Name,
+	}
+	clusterDeployment := &hivev1.ClusterDeployment{}
+	if err := r.Client.Get(ctx, clusterDeploymentKey, clusterDeployment); err != nil {
+		return "", err
+	}
 
-ExecStart=/usr/local/bin/kubenswrapper \
-    /usr/bin/kubelet \
-      --config=/etc/kubernetes/kubelet.conf \
-      --bootstrap-kubeconfig=/etc/kubernetes/kubeconfig \
-      --kubeconfig=/var/lib/kubelet/kubeconfig \
-      --container-runtime-endpoint=/var/run/crio/crio.sock \
-      --runtime-cgroups=/system.slice/crio.service \
-      --node-labels=node-role.kubernetes.io/control-plane,node-role.kubernetes.io/master,node.openshift.io/os_id=${ID},${CUSTOM_KUBELET_LABELS} \
-      --node-ip=${KUBELET_NODE_IP} \
-      --address=${KUBELET_NODE_IP} \
-      --minimum-container-ttl-duration=6m0s \
-      --cloud-provider= \
-      --provider-id=${KUBELET_PROVIDER_ID}\
-      --volume-plugin-dir=/etc/kubernetes/kubelet-plugins/volume/exec \
-       \
-      --hostname-override=${KUBELET_NODE_NAME} \
-      --register-with-taints=node-role.kubernetes.io/master=:NoSchedule \
-      --pod-infra-container-image=quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:b47df6baa7da64933f574bbfb110ed81efb926e6a730dfd846efcf2001093741 \
-      --system-reserved=cpu=${SYSTEM_RESERVED_CPU},memory=${SYSTEM_RESERVED_MEMORY},ephemeral-storage=${SYSTEM_RESERVED_ES} \
-      --v=${KUBELET_LOG_LEVEL}
+	clusterName, ok := clusterDeployment.Labels[clusterv1.ClusterNameLabel]
+	if !ok {
+		return "", fmt.Errorf("clusterdeployment %s does not belong to a CAPI cluster", clusterDeployment.Name)
+	}
+	return clusterName, nil
+}
 
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target`
+func getIngitionConfigOverride() string {
+	ignition := `{
+				"ignition": { "version": "3.1.0" },
+				"storage": {
+					  {
+		                "path": "/run/cluster-api/bootstrap-success.complete",
+				        "mode": 420,
+				        "contents": {
+							"source": "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw=="
+						}
+				      }
+			        ]
+				}
+			}
+`
+	return ignition
 }
 
 func (r *AgentReconciler) getMachineFromBMH(ctx context.Context, bmh *bmh_v1alpha1.BareMetalHost) (*clusterv1.Machine, error) {
