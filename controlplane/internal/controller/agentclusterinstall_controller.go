@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+
 	"github.com/pkg/errors"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1beta1"
@@ -252,6 +253,6 @@ func GenerateSecretWithOwner(clusterName client.ObjectKey, data []byte, owner me
 }
 
 func referencesClusterDeployment(acp controlplanev1beta1.AgentControlPlane, cd *hivev1.ClusterDeployment) bool {
-	return acp.Status.ClusterDeploymentRef.Name == cd.Name &&
+	return acp.Status.ClusterDeploymentRef != nil && acp.Status.ClusterDeploymentRef.Name == cd.Name &&
 		acp.Status.ClusterDeploymentRef.Namespace == cd.Namespace
 }
