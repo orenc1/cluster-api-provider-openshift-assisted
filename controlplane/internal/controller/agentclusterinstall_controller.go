@@ -36,8 +36,8 @@ import (
 )
 
 const (
-	clusterDeployementRefNameKey     = "spec.clusterDeploymentRef.name"
-	clusterDeploymentRefNamespaceKey = "spec.clusterDeploymentRef.namespace"
+	clusterDeployementRefNameKey     = "spec.agentConfigSpec.clusterDeploymentRef.name"
+	clusterDeploymentRefNamespaceKey = "spec.agentConfigSpec.clusterDeploymentRef.namespace"
 )
 
 // AgentClusterInstallReconciler reconciles a AgentClusterInstall object
@@ -187,16 +187,20 @@ func isInstalled(aci *hiveext.AgentClusterInstall) bool {
 }
 
 func (r *AgentClusterInstallReconciler) getAgentControlPlaneList(ctx context.Context, cd *hivev1.ClusterDeployment, aci *hiveext.AgentClusterInstall) (*controlplanev1beta1.AgentControlPlaneList, error) {
-	matchingFieldOpt := getMatchClusterDeploymentOpt(cd)
-	// Get agent control plane based on clusterDeployment
-	agentCPList := &v1beta1.AgentControlPlaneList{}
-	if err := r.Client.List(ctx, agentCPList, matchingFieldOpt, client.InNamespace(aci.Namespace)); err != nil {
+	acpList := &v1beta1.AgentControlPlaneList{}
+	if err := r.Client.List(ctx, acpList, client.InNamespace(aci.Namespace)); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return agentCPList, nil
+	filteredACPList := &v1beta1.AgentControlPlaneList{}
+	for _, acp := range acpList.Items {
+		if referencesClusterDeployment(acp, cd) {
+			filteredACPList.Items = append(filteredACPList.Items, acp)
+		}
+	}
+	return filteredACPList, nil
 }
 
 func getMatchClusterDeploymentOpt(cd *hivev1.ClusterDeployment) client.MatchingFields {
@@ -245,4 +249,9 @@ func GenerateSecretWithOwner(clusterName client.ObjectKey, data []byte, owner me
 		},
 		Type: clusterv1.ClusterSecretType,
 	}
+}
+
+func referencesClusterDeployment(acp controlplanev1beta1.AgentControlPlane, cd *hivev1.ClusterDeployment) bool {
+	return acp.Status.ClusterDeploymentRef.Name == cd.Name &&
+		acp.Status.ClusterDeploymentRef.Namespace == cd.Namespace
 }

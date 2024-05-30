@@ -95,7 +95,6 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 }
 
 func getProviderID(bmh *bmh_v1alpha1.BareMetalHost) string {
-	return bmh.Namespace + "/" + bmh.Name + "/" + "metal3machinename"
 	return string(bmh.GetUID())
 }
 
@@ -121,6 +120,7 @@ func getIngitionConfigOverride() string {
 	ignition := `{
 				"ignition": { "version": "3.1.0" },
 				"storage": {
+                  "files": [
 					  {
 		                "path": "/run/cluster-api/bootstrap-success.complete",
 				        "mode": 420,
@@ -128,9 +128,9 @@ func getIngitionConfigOverride() string {
 							"source": "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw=="
 						}
 				      }
-			        ]
+			      ]
 				}
-			}
+}
 `
 	return ignition
 }
