@@ -93,7 +93,6 @@ type AgentControlPlaneConfigSpec struct {
 	// SSHAuthorizedKey ssh key for accessing the cluster nodes after reboot
 	SSHAuthorizedKey string `json:"sshAuthorizedKey,omitempty"`
 
-
 	// From ClusterDeployment
 
 	// ClusterName is the friendly name of the cluster. It is used for subdomains,
@@ -110,15 +109,14 @@ type AgentControlPlaneConfigSpec struct {
 	// PullSecretRef references pull secret necessary for the cluster installation
 	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
 
-
-	ReleaseImage          string                        `json:"releaseImage"`
+	ReleaseImage string `json:"releaseImage"`
 }
 
 // AgentControlPlaneStatus defines the observed state of AgentControlPlane
 type AgentControlPlaneStatus struct {
 	// ClusterDeploymentRef references the ClusterDeployment used to create the cluster
 	ClusterDeploymentRef *corev1.ObjectReference `json:"clusterDeploymentRef,omitempty"`
-	
+
 	// Selector is the label selector in string format to avoid introspection
 	// by clients, and is used to provide the CRD-based integration for the
 	// scale subresource and additional integrations for things like kubectl
