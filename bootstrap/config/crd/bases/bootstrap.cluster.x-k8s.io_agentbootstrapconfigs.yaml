@@ -177,7 +177,7 @@ spec:
               AgentBootstrapConfig
             properties:
               conditions:
-                description: Conditions defines current service state of the KubeadmConfig.
+                description: Conditions defines current service state of the AgentBootstrapConfig.
                 items:
                   description: Condition defines an observation of a Cluster API resource
                     operational state.

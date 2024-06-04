@@ -107,7 +107,7 @@ type AgentBootstrapConfigStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// Conditions defines current service state of the KubeadmConfig.
+	// Conditions defines current service state of the AgentBootstrapConfig.
 	// +optional
 	Conditions clusterv1.Conditions `json:"conditions,omitempty"`
 }

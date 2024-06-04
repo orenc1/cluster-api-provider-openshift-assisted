@@ -157,7 +157,7 @@ type AgentControlPlaneStatus struct {
 	// +optional
 	Initialized bool `json:"initialized"`
 
-	// Ready denotes that the KubeadmControlPlane API Server became ready during initial provisioning
+	// Ready denotes that the AgentControlPlane API Server became ready during initial provisioning
 	// to receive requests.
 	// NOTE: this field is part of the Cluster API contract and it is used to orchestrate provisioning.
 	// The value of this field is never updated after provisioning is completed. Please use conditions
