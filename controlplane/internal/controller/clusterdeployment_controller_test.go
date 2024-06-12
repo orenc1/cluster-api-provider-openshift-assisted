@@ -42,6 +42,7 @@ const (
 	clusterDeploymentName = "test-clusterdeployment"
 	namespace             = "test"
 	clusterName           = "test-cluster"
+	openShiftVersion      = "4.16.0"
 )
 
 var _ = Describe("ClusterDeployment Controller", func() {
@@ -84,6 +85,7 @@ var _ = Describe("ClusterDeployment Controller", func() {
 			Expect(k8sClient.Create(ctx, cd)).To(Succeed())
 
 			acp := utils.NewAgentControlPlane(namespace, agentControlPlaneName)
+			acp.Spec.Version = openShiftVersion
 			Expect(k8sClient.Create(ctx, acp)).To(Succeed())
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -104,6 +106,7 @@ var _ = Describe("ClusterDeployment Controller", func() {
 			enableOn := models.DiskEncryptionEnableOnAll
 			mode := models.DiskEncryptionModeTang
 			acp := utils.NewAgentControlPlane(namespace, agentControlPlaneName)
+			acp.Spec.Version = openShiftVersion
 			acp.Spec.AgentConfigSpec.SSHAuthorizedKey = "mykey"
 			acp.Spec.AgentConfigSpec.DiskEncryption = &hiveext.DiskEncryption{
 				EnableOn:    &enableOn,
@@ -136,6 +139,43 @@ var _ = Describe("ClusterDeployment Controller", func() {
 			Expect(aci.Spec.Proxy).To(Equal(acp.Spec.AgentConfigSpec.Proxy))
 			Expect(aci.Spec.MastersSchedulable).To(Equal(acp.Spec.AgentConfigSpec.MastersSchedulable))
 			Expect(aci.Spec.SSHPublicKey).To(Equal(acp.Spec.AgentConfigSpec.SSHAuthorizedKey))
+		})
+		When("ACP with ingressVIPs and apiVIPs", func() {
+			It("should start a multinode cluster install", func() {
+				cluster := utils.NewCluster(clusterName, namespace)
+				Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+
+				cd := utils.NewClusterDeployment(namespace, clusterDeploymentName)
+
+				acp := utils.NewAgentControlPlane(namespace, agentControlPlaneName)
+				acp.Spec.Version = openShiftVersion
+				apiVIPs := []string{"1.2.3.4", "2.3.4.5"}
+				ingressVIPs := []string{"9.9.9.9", "10.10.10.10"}
+				acp.Spec.AgentConfigSpec.APIVIPs = apiVIPs
+				acp.Spec.AgentConfigSpec.IngressVIPs = ingressVIPs
+
+				Expect(controllerutil.SetOwnerReference(cluster, acp, testScheme)).To(Succeed())
+				Expect(controllerutil.SetOwnerReference(acp, cd, testScheme)).To(Succeed())
+				ref, _ := reference.GetReference(testScheme, cd)
+				acp.Status.ClusterDeploymentRef = ref
+				Expect(k8sClient.Create(ctx, acp)).To(Succeed())
+				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
+
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(cd),
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				aci := &hiveext.AgentClusterInstall{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(cd), aci)).To(Succeed())
+
+				// Assert baremetal multinode platform install
+				Expect(aci.Spec.PlatformType).To(Equal(hiveext.BareMetalPlatformType))
+				Expect(aci.Spec.IngressVIPs).To(Equal(ingressVIPs))
+				Expect(aci.Spec.APIVIPs).To(Equal(apiVIPs))
+				Expect(aci.Annotations).To(HaveKey(InstallConfigOverrides))
+				Expect(aci.Annotations[InstallConfigOverrides]).To(Equal(`{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`))
+			})
 		})
 	})
 	AfterEach(func() {

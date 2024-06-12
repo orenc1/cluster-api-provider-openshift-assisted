@@ -179,7 +179,6 @@ func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(
 ) error {
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, aci, func() error { return nil })
 	return client.IgnoreAlreadyExists(err)
-
 }
 
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
@@ -245,6 +244,15 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 			},
 			ManifestsConfigMapRefs: additionalManifests,
 		},
+	}
+
+	if len(acp.Spec.AgentConfigSpec.APIVIPs) > 0 && len(acp.Spec.AgentConfigSpec.IngressVIPs) > 0 {
+		aci.Spec.APIVIPs = acp.Spec.AgentConfigSpec.APIVIPs
+		aci.Spec.IngressVIPs = acp.Spec.AgentConfigSpec.IngressVIPs
+		aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
+		aci.Annotations = map[string]string{
+			InstallConfigOverrides: `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`,
+		}
 	}
 	return aci, nil
 }

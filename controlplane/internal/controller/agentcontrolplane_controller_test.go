@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 
+	"sigs.k8s.io/cluster-api/util/conditions"
+
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -219,6 +221,33 @@ var _ = Describe("AgentControlPlane Controller", func() {
 			Expect(agentControlPlane.Finalizers).NotTo(BeEmpty())
 			Expect(agentControlPlane.Finalizers).To(ContainElement(acpFinalizer))
 		})
+		When("an invalid version is set on the AgentControlPlane", func() {
+			It("should return error", func() {
+				By("setting the cluster as the owner ref on the agent control plane")
+				agentControlPlane := getAgentControlPlane()
+				agentControlPlane.Spec.Version = "4.12.0"
+				agentControlPlane.SetOwnerReferences(
+					[]metav1.OwnerReference{
+						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+					},
+				)
+				Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
+				By("checking if the condition of invalid version")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(k8sClient.Get(ctx, typeNamespacedName, agentControlPlane)).To(Succeed())
+
+				condition := conditions.Get(agentControlPlane,
+					controlplanev1alpha1.MachinesCreatedCondition,
+				)
+				Expect(condition).NotTo(BeNil())
+				Expect(condition.Message).To(Equal("version 4.12.0 is not supported, the minimum supported version is 4.14.0"))
+
+			})
+		})
 	})
 })
 
@@ -227,6 +256,9 @@ func getAgentControlPlane() *controlplanev1alpha1.AgentControlPlane {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      agentControlPlaneName,
 			Namespace: namespace,
+		},
+		Spec: controlplanev1alpha1.AgentControlPlaneSpec{
+			Version: "4.16.0",
 		},
 	}
 }

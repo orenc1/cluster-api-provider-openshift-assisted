@@ -77,7 +77,7 @@ type AgentBootstrapConfigReconciler struct {
 // +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls;agentclusterinstalls/status,verbs=get;list
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines,verbs=get;watch
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
-// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments;machinedeployments/status,verbs=get
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinesets;machinesets/status,verbs=get;list;watch;
 // +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=agentcontrolplanes,verbs=get
 
 // Reconciles AgentBootstrapConfig
@@ -425,9 +425,16 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineImage(
 		log.WithValues("ISO", config.Status.ISODownloadURL)
 		log.V(logutil.DebugLevel).Info("adding ISO URL to metal3 machine")
 
+		patchHelper, err := patch.NewHelper(metal3Machine, r.Client)
+		if err != nil {
+			log.Error(err, "couldn't create patch helper for metal3machine")
+			return err
+		}
+
 		metal3Machine.Spec.Image.URL = config.Status.ISODownloadURL
 		metal3Machine.Spec.Image.DiskFormat = &liveIsoFormat
-		if err := r.Client.Update(ctx, metal3Machine); err != nil {
+
+		if err := patchHelper.Patch(ctx, metal3Machine); err != nil {
 			log.Error(err, "couldn't update metal3 machine")
 			return err
 		}
@@ -443,20 +450,27 @@ func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(
 	machine *clusterv1.Machine,
 ) (types.NamespacedName, error) {
 	acp := controlplanev1alpha1.AgentControlPlane{}
+	namespace := acp.Namespace
 	err := util.GetTypedOwner(ctx, r.Client, machine, &acp)
 	if err != nil {
-		// Machine is not owned by ACP, check for MD
-		md := clusterv1.MachineDeployment{}
-		if err := util.GetTypedOwner(ctx, r.Client, machine, &md); err != nil {
+		// Machine is not owned by ACP, check for MS
+		ms := clusterv1.MachineSet{}
+		if err := util.GetTypedOwner(ctx, r.Client, machine, &ms); err != nil {
 			return types.NamespacedName{}, fmt.Errorf("machine has neither acp nor md owner")
 		}
+		if ms.Spec.Template.Spec.InfrastructureRef.Namespace != "" {
+			namespace = ms.Spec.Template.Spec.InfrastructureRef.Namespace
+		}
 		return types.NamespacedName{
-			Namespace: md.Spec.Template.Spec.InfrastructureRef.Namespace,
-			Name:      md.Spec.Template.Spec.InfrastructureRef.Name,
+			Namespace: namespace,
+			Name:      ms.Spec.Template.Spec.InfrastructureRef.Name,
 		}, nil
 	}
+	if acp.Spec.MachineTemplate.InfrastructureRef.Namespace != "" {
+		namespace = acp.Spec.MachineTemplate.InfrastructureRef.Namespace
+	}
 	return types.NamespacedName{
-		Namespace: acp.Spec.MachineTemplate.InfrastructureRef.Namespace,
+		Namespace: namespace,
 		Name:      acp.Spec.MachineTemplate.InfrastructureRef.Name,
 	}, nil
 }
@@ -469,7 +483,7 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 	tplKey, err := r.getInfrastructureRefKey(ctx, machine)
-	log.WithValues("Metal3MachineTemplate Name", tplKey.Name, "Metal3MachineTemplate Namespace", tplKey.Namespace)
+	log = log.WithValues("Metal3MachineTemplate Name", tplKey.Name, "Metal3MachineTemplate Namespace", tplKey.Namespace)
 
 	if err != nil {
 		return err
@@ -483,9 +497,15 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(
 
 	if machineTpl.Spec.Template.Spec.Image.URL != config.Status.ISODownloadURL ||
 		machineTpl.Spec.Template.Spec.Image.DiskFormat != &liveIsoFormat {
+		patchHelper, err := patch.NewHelper(machineTpl, r.Client)
+		if err != nil {
+			log.Error(err, "couldn't create patch helper for machineTpl")
+			return err
+		}
 		machineTpl.Spec.Template.Spec.Image.URL = config.Status.ISODownloadURL
 		machineTpl.Spec.Template.Spec.Image.DiskFormat = &liveIsoFormat
-		if err := r.Client.Update(ctx, machineTpl); err != nil {
+
+		if err := patchHelper.Patch(ctx, machineTpl); err != nil {
 			log.Error(err, "couldn't update machine template")
 			return err
 		}
