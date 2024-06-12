@@ -15,6 +15,7 @@ require (
 	github.com/openshift/assisted-service/api v0.0.0
 	github.com/openshift/assisted-service/models v0.0.0
 	github.com/openshift/hive/apis v0.0.0-20220222213051-def9088fdb5a
+	github.com/pelletier/go-toml v1.9.5
 	github.com/pkg/errors v0.9.1
 	k8s.io/api v0.29.3
 	k8s.io/apimachinery v0.30.0

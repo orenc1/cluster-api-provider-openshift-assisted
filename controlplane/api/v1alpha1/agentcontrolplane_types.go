@@ -110,6 +110,10 @@ type AgentControlPlaneConfigSpec struct {
 	PullSecretRef *corev1.LocalObjectReference `json:"pullSecretRef,omitempty"`
 
 	ReleaseImage string `json:"releaseImage"`
+
+	// ImageRegistryRef is a reference to a configmap containing both the additional
+	// image registries and their corresponding certificate bundles to be used in the spoke cluster
+	ImageRegistryRef *corev1.LocalObjectReference `json:"imageRegistryRef,omitempty"`
 }
 
 // AgentControlPlaneStatus defines the observed state of AgentControlPlane
