@@ -18,7 +18,7 @@ COPY bootstrap/api/ bootstrap/api/
 COPY controlplane/api/ controlplane/api/
 COPY util util
 COPY assistedinstaller assistedinstaller
-COPY ${PROVIDER}/internal/controller/ ${PROVIDER}/internal/controller/
+COPY ${PROVIDER}/internal/ ${PROVIDER}/internal/
 
 # Build
 # the GOARCH has not a default value to allow the binary be built according to the host where the command
