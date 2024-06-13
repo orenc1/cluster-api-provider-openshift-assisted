@@ -274,6 +274,19 @@ spec:
                           regarding tang's configuration
                         type: string
                     type: object
+                  imageRegistryRef:
+                    description: |-
+                      ImageRegistryRef is a reference to a configmap containing both the additional
+                      image registries and their corresponding certificate bundles to be used in the spoke cluster
+                    properties:
+                      name:
+                        description: |-
+                          Name of the referent.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          TODO: Add other useful fields. apiVersion, kind, uid?
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
                   manifestsConfigMapRefs:
                     description: |-
                       ManifestsConfigMapRefs is an array of references to user-provided manifests ConfigMaps to
@@ -661,6 +674,18 @@ kind: ClusterRole
 metadata:
   name: capi-agent-controlplanemanager-role
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - ""
   resources:
