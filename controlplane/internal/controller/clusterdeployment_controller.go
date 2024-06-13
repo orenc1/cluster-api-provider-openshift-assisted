@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
-	imageRegistry "github.com/openshift-assisted/cluster-api-agent/controlplane/internal/controller/imageregistry"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
 	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
@@ -221,7 +221,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(ctx context.Con
 	}
 
 	if acp.Spec.AgentConfigSpec.ImageRegistryRef != nil {
-		imageRegistryManifest, err := imageRegistry.CreateConfig(ctx, r.Client, acp.Spec.AgentConfigSpec.ImageRegistryRef, clusterDeployment.Namespace)
+		imageRegistryManifest, err := imageregistry.CreateConfig(ctx, r.Client, acp.Spec.AgentConfigSpec.ImageRegistryRef, clusterDeployment.Namespace)
 		if err != nil {
 			log.Error(err, "failed to create image registry config manifest")
 		} else {
