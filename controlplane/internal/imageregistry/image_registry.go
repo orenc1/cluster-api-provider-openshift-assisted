@@ -1,4 +1,4 @@
-package imageRegistry
+package imageregistry
 
 import (
 	"context"
@@ -31,7 +31,6 @@ const (
 // CR that references the ConfigMap with the additional trusted certificate.
 // Successful creation of the ConfigMap will return the name of the created ConfigMap to be added as a manifest reference
 func CreateConfig(ctx context.Context, client client.Client, registryRef *corev1.LocalObjectReference, namespace string) (string, error) {
-
 	imageRegistryConfigMap := &corev1.ConfigMap{}
 	if err := client.Get(ctx, types.NamespacedName{Name: registryRef.Name, Namespace: namespace}, imageRegistryConfigMap); err != nil {
 		return "", err
@@ -49,20 +48,24 @@ func CreateConfig(ctx context.Context, client client.Client, registryRef *corev1
 }
 
 func createImageRegistryConfig(imageRegistry *corev1.ConfigMap, namespace string) (*corev1.ConfigMap, error) {
+	registryConf, ok := imageRegistry.Data[registryConfKey]
+	if !ok {
+		return nil, fmt.Errorf("failed to find registry key [%s] in configmap %s/%s for image registry configuration", registryConfKey, imageRegistry.Name, namespace)
+	}
+
+	imageDigestMirrorSet, err := getImageRegistries(registryConf)
+	if err != nil {
+		return nil, err
+	}
+
 	imageConfig := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      imageConfigMapName,
 			Namespace: namespace,
 		},
-		Data: make(map[string]string),
-	}
-	registryConf, ok := imageRegistry.Data[registryConfKey]
-	if ok {
-		imageDigestMirrorSet, err := getImageRegistries(registryConf)
-		if err != nil {
-			return nil, err
-		}
-		imageConfig.Data[imageDigestMirrorSetKey] = imageDigestMirrorSet
+		Data: map[string]string{
+			imageDigestMirrorSetKey: imageDigestMirrorSet,
+		},
 	}
 
 	registryCert, ok := imageRegistry.Data[registryCertKey]
@@ -89,47 +92,54 @@ func getImageRegistries(registry string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	idmsMirrors := make([]configv1.ImageDigestMirrors, 0)
 	registriesTree, ok := tomlTree.Get("registry").([]*toml.Tree)
 	if !ok {
 		return "", fmt.Errorf("failed to find registry in toml tree")
 	}
 
-	// Add each registry and its mirrors as a image digest mirror object
-	for _, registryTree := range registriesTree {
-		var imageDigestMirror configv1.ImageDigestMirrors
-		source, ok := registryTree.Get("location").(string)
-		if !ok {
-			continue
-		}
-		imageDigestMirror.Source = source
-
-		var mirrors []configv1.ImageMirror
-		mirrorTrees, ok := registryTree.Get("mirror").([]*toml.Tree)
-		if !ok {
-			continue
-		}
-
-		for _, mirrorTree := range mirrorTrees {
-			mirror, ok := mirrorTree.Get("location").(string)
-			if ok {
-				mirrors = append(mirrors, configv1.ImageMirror(mirror))
-			}
-		}
-
-		if len(mirrors) < 1 {
-			continue
-		}
-		imageDigestMirror.Mirrors = mirrors
-		idmsMirrors = append(idmsMirrors, imageDigestMirror)
-	}
-
+	idmsMirrors := getImageDigestMirrors(registriesTree)
 	if len(idmsMirrors) < 1 {
 		return "", fmt.Errorf("failed to find any mirror registry")
 	}
 
-	idms := configv1.ImageDigestMirrorSet{
+	idms := generateImageDigestMirrorSet(idmsMirrors)
+	idmsJSON, err := json.Marshal(idms)
+	if err != nil {
+		return "", err
+	}
+	return string(idmsJSON), nil
+}
+
+func getImageDigestMirrors(registries []*toml.Tree) []configv1.ImageDigestMirrors {
+	idmsMirrors := make([]configv1.ImageDigestMirrors, 0)
+
+	// Add each registry and its mirrors as a image digest mirror object
+	for _, registry := range registries {
+		var imageDigestMirror configv1.ImageDigestMirrors
+		source, sourceExists := registry.Get("location").(string)
+		mirrorTrees, mirrorExists := registry.Get("mirror").([]*toml.Tree)
+		if !sourceExists || !mirrorExists {
+			continue
+		}
+
+		imageDigestMirror.Source = source
+		for _, mirrorTree := range mirrorTrees {
+			if mirror, ok := mirrorTree.Get("location").(string); ok {
+				imageDigestMirror.Mirrors = append(imageDigestMirror.Mirrors, configv1.ImageMirror(mirror))
+			}
+		}
+
+		if len(imageDigestMirror.Mirrors) < 1 {
+			// Indicates there were no mirror registries found for this registry, so don't add it
+			continue
+		}
+		idmsMirrors = append(idmsMirrors, imageDigestMirror)
+	}
+	return idmsMirrors
+}
+
+func generateImageDigestMirrorSet(mirrors []configv1.ImageDigestMirrors) *configv1.ImageDigestMirrorSet {
+	return &configv1.ImageDigestMirrorSet{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ImageDigestMirrorSet",
 			APIVersion: configv1.GroupVersion.String(),
@@ -138,16 +148,9 @@ func getImageRegistries(registry string) (string, error) {
 			Name: imageRegistryName,
 		},
 		Spec: configv1.ImageDigestMirrorSetSpec{
-			ImageDigestMirrors: idmsMirrors,
+			ImageDigestMirrors: mirrors,
 		},
 	}
-
-	idmsJSON, err := json.Marshal(idms)
-	if err != nil {
-		return "", err
-	}
-
-	return string(idmsJSON), nil
 }
 
 // addImageRegistryCertificate creates a ConfigMap CR containing the registry certificate to be created on the spoke cluster

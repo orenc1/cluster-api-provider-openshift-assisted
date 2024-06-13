@@ -1,4 +1,4 @@
-package imageRegistry
+package imageregistry
 
 import (
 	"context"
@@ -159,6 +159,22 @@ var _ = Describe("ImageRegistry Test", func() {
 		It("fails to create the image registry configmap when the user configmap doesn't exist", func() {
 			By("Deleting the user created ConfigMap")
 			Expect(k8sClient.Delete(ctx, registryRefCM)).To(Succeed())
+
+			By("Calling the CreateConfig function")
+			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			Expect(err).To(HaveOccurred())
+			Expect(configMapName).To(BeEmpty())
+
+			By("Ensuring the ConfigMap wasn't created")
+			imageRegistryConfigMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).NotTo(Succeed())
+		})
+
+		It("fails to create the image registry configmap when the user configmap doesn't contain the registry config key", func() {
+			By("Creating the user created ConfigMap")
+			newRegistryCM := registryRefCM.DeepCopy()
+			delete(newRegistryCM.Data, registryConfKey)
+			Expect(k8sClient.Create(ctx, newRegistryCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
 			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
