@@ -23,9 +23,10 @@ import (
 	"github.com/pkg/errors"
 
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-agent/util"
+	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
-	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,13 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const (
-	clusterDeployementRefNameKey     = "spec.agentConfigSpec.clusterDeploymentRef.name"
-	clusterDeploymentRefNamespaceKey = "spec.agentConfigSpec.clusterDeploymentRef.namespace"
-)
-
 // AgentClusterInstallReconciler reconciles a AgentClusterInstall object
-
 type AgentClusterInstallReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -58,10 +53,10 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 	log := ctrl.LoggerFrom(ctx)
 
 	defer func() {
-		log.Info("Agent Cluster Install Reconcile ended")
+		log.V(logutil.TraceLevel).Info("Agent Cluster Install Reconcile ended")
 	}()
 
-	log.Info("Agent Cluster Install Reconcile started")
+	log.V(logutil.TraceLevel).Info("Agent Cluster Install Reconcile started")
 	aci := &hiveext.AgentClusterInstall{}
 	if err := r.Client.Get(ctx, req.NamespacedName, aci); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -69,67 +64,59 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 		}
 		return ctrl.Result{}, err
 	}
-	log.Info("Reconciling AgentClusterInstall", "name", aci.Name, "namespace", aci.Namespace)
+	log.WithValues("AgentClusterInstall Name", aci.Name, "AgentClusterInstall Namespace", aci.Namespace)
 
-	cd, err := r.getClusterDeployment(ctx, aci)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
+	acp := controlplanev1alpha1.AgentControlPlane{}
+	if err := util.GetTypedOwner(ctx, r.Client, aci, &acp); err != nil {
 		return ctrl.Result{}, err
 	}
-	acpList, err := r.getAgentControlPlaneList(ctx, cd, aci)
-	if err != nil {
+	log.WithValues("AgentControlPlane Name", acp.Name, "AgentControlPlane Namespace", acp.Namespace)
+
+	if err := r.reconcile(ctx, aci, &acp); err != nil {
 		return ctrl.Result{}, err
 	}
-	if acpList == nil || len(acpList.Items) == 0 {
-		log.Info("agentcontrolplane not found", "num", len(acpList.Items))
-		return ctrl.Result{}, nil
-	}
-	log.Info("found agentcontrolplane", "num", len(acpList.Items))
 
-	for _, acp := range acpList.Items {
-		// Check if AgentClusterInstall has moved to day 2 aka control plane is installed
-		if isInstalled(aci) && hasKubeconfigRef(aci) {
-			acp.Status.Initialized = true
-
-			log.Info("Agent cluster install for control plane nodes has finished. Attaching kubeconfig secret to agent control plane",
-				"agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "agent control plane name", acp.Name)
-
-			kubeconfigSecret, err := r.getACIKubeconfig(ctx, aci, acp)
-			if err != nil {
-				log.Error(err, "failed getting kubeconfig secret for agentclusterinstall", "agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "secret name", kubeconfigSecret.Name)
-				return ctrl.Result{}, err
-			}
-			log.Info("found kubeconfig secret", "agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "secret name", kubeconfigSecret.Name)
-
-			clusterName := acp.Labels[clusterv1.ClusterNameLabel]
-			labels := map[string]string{
-				clusterv1.ClusterNameLabel: clusterName,
-			}
-
-			if err := r.updateLabels(ctx, kubeconfigSecret, labels); err != nil {
-				log.Error(err, "failed updating kubeconfig secret for agentclusterinstall", "agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "secret name", kubeconfigSecret.Name)
-				return ctrl.Result{}, err
-			}
-
-			if !r.ClusterKubeconfigSecretExists(ctx, clusterName, acp.Namespace) {
-				log.Info("Cluster kubeconfig doesn't exist, creating it")
-				if err := r.createKubeconfig(ctx, kubeconfigSecret, clusterName, acp); err != nil {
-					log.Error(err, "failed to create secret for agent control plane", "agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "agent control plane name", acp.Name)
-					return ctrl.Result{}, err
-				}
-			}
-			// Update AgentControlPlane status
-			acp.Status.Ready = true
-			if err := r.Client.Status().Update(ctx, &acp); err != nil {
-				log.Error(err, "failed updating agent control plane to ready for agentclusterinstall", "agent cluster install name", aci.Name, "agent cluster install namespace", aci.Namespace, "agent control plane name", acp.Name)
-				return ctrl.Result{}, err
-			}
+	// Check if AgentClusterInstall has moved to day 2 aka control plane is installed
+	if isInstalled(aci) {
+		acp.Status.Ready = true
+		if err := r.Client.Status().Update(ctx, &acp); err != nil {
+			log.Error(err, "failed setting AgentControlPlane to ready")
+			return ctrl.Result{}, err
 		}
 	}
-
 	return ctrl.Result{}, nil
+}
+
+func (r *AgentClusterInstallReconciler) reconcile(ctx context.Context, aci *hiveext.AgentClusterInstall, acp *controlplanev1alpha1.AgentControlPlane) error {
+	if !hasKubeconfigRef(aci) {
+		return nil
+	}
+
+	kubeconfigSecret, err := r.getACIKubeconfig(ctx, aci, *acp)
+	if err != nil {
+		return err
+	}
+
+	clusterName := acp.Labels[clusterv1.ClusterNameLabel]
+	labels := map[string]string{
+		clusterv1.ClusterNameLabel: clusterName,
+	}
+
+	if err := r.updateLabels(ctx, kubeconfigSecret, labels); err != nil {
+		return err
+	}
+
+	if !r.ClusterKubeconfigSecretExists(ctx, clusterName, acp.Namespace) {
+		if err := r.createKubeconfig(ctx, kubeconfigSecret, clusterName, *acp); err != nil {
+			return err
+		}
+	}
+
+	acp.Status.Initialized = true
+	if err := r.Client.Status().Update(ctx, acp); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *AgentClusterInstallReconciler) createKubeconfig(ctx context.Context, kubeconfigSecret *corev1.Secret, clusterName string, acp controlplanev1alpha1.AgentControlPlane) error {
@@ -155,8 +142,11 @@ func (r *AgentClusterInstallReconciler) createKubeconfig(ctx context.Context, ku
 }
 
 func (r *AgentClusterInstallReconciler) updateLabels(ctx context.Context, obj client.Object, labels map[string]string) error {
-
 	objLabels := obj.GetLabels()
+	if len(objLabels) < 1 {
+		objLabels = make(map[string]string)
+	}
+
 	for k, v := range labels {
 		objLabels[k] = v
 	}
@@ -179,35 +169,11 @@ func (r *AgentClusterInstallReconciler) getACIKubeconfig(ctx context.Context, ac
 }
 
 func hasKubeconfigRef(aci *hiveext.AgentClusterInstall) bool {
-	return aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name != ""
+	return aci.Spec.ClusterMetadata != nil && aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name != ""
 }
 
 func isInstalled(aci *hiveext.AgentClusterInstall) bool {
 	return aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts
-}
-
-func (r *AgentClusterInstallReconciler) getAgentControlPlaneList(ctx context.Context, cd *hivev1.ClusterDeployment, aci *hiveext.AgentClusterInstall) (*controlplanev1alpha1.AgentControlPlaneList, error) {
-	acpList := &controlplanev1alpha1.AgentControlPlaneList{}
-	if err := r.Client.List(ctx, acpList, client.InNamespace(aci.Namespace)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	filteredACPList := &controlplanev1alpha1.AgentControlPlaneList{}
-	for _, acp := range acpList.Items {
-		if referencesClusterDeployment(acp, cd) {
-			filteredACPList.Items = append(filteredACPList.Items, acp)
-		}
-	}
-	return filteredACPList, nil
-}
-
-func getMatchClusterDeploymentOpt(cd *hivev1.ClusterDeployment) client.MatchingFields {
-	return client.MatchingFields{
-		clusterDeployementRefNameKey:     cd.Name,
-		clusterDeploymentRefNamespaceKey: cd.Namespace,
-	}
 }
 
 func (r *AgentClusterInstallReconciler) ClusterKubeconfigSecretExists(ctx context.Context, clusterName, namespace string) bool {
@@ -217,18 +183,6 @@ func (r *AgentClusterInstallReconciler) ClusterKubeconfigSecretExists(ctx contex
 		return !apierrors.IsNotFound(err)
 	}
 	return true
-}
-
-func (r *AgentClusterInstallReconciler) getClusterDeployment(ctx context.Context, aci *hiveext.AgentClusterInstall) (*hivev1.ClusterDeployment, error) {
-	// Get cluster deployment associated with this agent cluster install
-	cdName := aci.Spec.ClusterDeploymentRef.Name
-	cd := hivev1.ClusterDeployment{}
-
-	// Ensure cluster deployment exists
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: cdName, Namespace: aci.Namespace}, &cd); err != nil {
-		return &cd, err
-	}
-	return &cd, nil
 }
 
 // GenerateSecretWithOwner returns a Kubernetes secret for the given Cluster name, namespace, kubeconfig data, and ownerReference.
@@ -249,9 +203,4 @@ func GenerateSecretWithOwner(clusterName client.ObjectKey, data []byte, owner me
 		},
 		Type: clusterv1.ClusterSecretType,
 	}
-}
-
-func referencesClusterDeployment(acp controlplanev1alpha1.AgentControlPlane, cd *hivev1.ClusterDeployment) bool {
-	return acp.Status.ClusterDeploymentRef != nil && acp.Status.ClusterDeploymentRef.Name == cd.Name &&
-		acp.Status.ClusterDeploymentRef.Namespace == cd.Namespace
 }
