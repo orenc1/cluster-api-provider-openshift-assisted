@@ -18,12 +18,13 @@ package controller
 
 import (
 	"context"
+	"time"
+
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/tools/reference"
 	"sigs.k8s.io/cluster-api/util/patch"
-	"time"
 
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
@@ -51,8 +52,9 @@ import (
 )
 
 const (
-	agentControlPlaneKind = "AgentControlPlane"
-	acpFinalizer          = "agentcontrolplane." + controlplanev1alpha1.Group + "/deprovision"
+	agentControlPlaneKind     = "AgentControlPlane"
+	acpFinalizer              = "agentcontrolplane." + controlplanev1alpha1.Group + "/deprovision"
+	placeholderPullSecretName = "placeholder-pull-secret"
 )
 
 // AgentControlPlaneReconciler reconciles a AgentControlPlane object
@@ -137,7 +139,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 	if cluster == nil {
-		log.Info("Cluster Controller has not yet set OwnerRef")
+		log.V(logutil.TraceLevel).Info("Cluster Controller has not yet set OwnerRef")
 		return ctrl.Result{Requeue: true, RequeueAfter: 10 * time.Second}, nil
 	}
 
@@ -147,13 +149,16 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	if !cluster.Status.InfrastructureReady || !cluster.Spec.ControlPlaneEndpoint.IsValid() {
-		log.Info("cluster is not ready, retrying...")
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
 	}
-	// TODO: handle changes in pull-secret (for example)
+
+	if err := r.ensurePullSecret(ctx, acp); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// create clusterdeployment if not set
 	if acp.Status.ClusterDeploymentRef == nil {
-		log.Info("Creating clusterdeployment")
+		log.V(logutil.TraceLevel).Info("Creating clusterdeployment")
 		clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, cluster.Name)
 		if err := r.Create(ctx, clusterDeployment); err != nil && !apierrors.IsAlreadyExists(err) {
 			log.Error(
@@ -172,7 +177,6 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				return
 			}
 			acp.Status.ClusterDeploymentRef = ref
-			log.Info("Added clusterdeployment ref")
 		}
 	}
 	// Retrieve clusterdeployment
@@ -206,14 +210,9 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	acp.Status.Replicas = numMachines
 	acp.Status.UpdatedReplicas = numMachines
 	acp.Status.UnavailableReplicas = numMachines - acp.Status.ReadyReplicas
-
-	log.Info("ACP", "all acp spec", acp.Spec)
 	if machinesToCreate > 0 {
-		log.Info("Creating Machines", "number of machines", machinesToCreate)
 		for i := 0; i < int(machinesToCreate); i++ {
-			log.Info("Scaling up control plane", "Desired", desiredReplicas, "Existing", numMachines)
 			bootstrapSpec := acp.Spec.AgentBootstrapConfigSpec.DeepCopy()
-			log.Info("agent bootstrap config", "spec", bootstrapSpec, "all acp spec", acp.Spec)
 			bootstrapSpec.PullSecretRef = acp.Spec.AgentBootstrapConfigSpec.PullSecretRef.DeepCopy()
 			if err := r.cloneConfigsAndGenerateMachine(ctx, cluster, acp, bootstrapSpec); err != nil {
 				log.Info("Error cloning configs", "err", err)
@@ -240,7 +239,6 @@ func (r *AgentControlPlaneReconciler) handleDeletion(ctx context.Context, acp *c
 		log.Error(err, "failed deleting cluster deployment for ACP")
 		return ctrl.Result{}, err
 	}
-	log.Info("ACP's clusterdeployment is deleted")
 	acp.Status.ClusterDeploymentRef = nil
 
 	// will be updated in the deferred function
@@ -451,4 +449,40 @@ func (r *AgentControlPlaneReconciler) generateAgentBootstrapConfig(ctx context.C
 	}
 
 	return reference.GetReference(r.Scheme, bootstrapConfig)
+}
+
+func (r *AgentControlPlaneReconciler) ensurePullSecret(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane) error {
+	if acp.Spec.AgentConfigSpec.PullSecretRef != nil {
+		return nil
+	}
+
+	secret := GenerateSecret(placeholderPullSecretName, acp.Namespace)
+	if err := controllerutil.SetOwnerReference(acp, secret, r.Scheme); err != nil {
+		return err
+	}
+
+	if err := r.Client.Create(ctx, secret); err != nil {
+		return err
+	}
+	acp.Spec.AgentConfigSpec.PullSecretRef = &corev1.LocalObjectReference{Name: secret.Name}
+	return r.Client.Update(ctx, acp)
+}
+
+// Assisted-service expects the pull secret to
+// 1. Have .dockerconfigjson as a key
+// 2. Have the value of .dockerconfigjson be a base64-encoded JSON
+// 3. The JSON must have the key "auths" followed by repository with an "auth" key
+func GenerateSecret(name, namespace string) *corev1.Secret {
+	// placeholder:secret base64 encoded is cGxhY2Vob2xkZXI6c2VjcmV0Cg==
+	fakePullSecret := "{\"auths\":{\"fake-pull-secret\":{\"auth\":\"cGxhY2Vob2xkZXI6c2VjcmV0Cg==\"}}}"
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			".dockerconfigjson": []byte(fakePullSecret),
+		},
+	}
 }
