@@ -5,17 +5,10 @@ import (
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	"github.com/openshift/hive/apis/hive/v1/agent"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func GetClusterDeploymentFromConfig(acp *v1alpha1.AgentControlPlane, clusterName string) *hivev1.ClusterDeployment {
-	var pullSecret *corev1.LocalObjectReference
-	if acp.Spec.AgentConfigSpec.PullSecretRef != nil {
-		pullSecret = acp.Spec.AgentConfigSpec.PullSecretRef
-	}
-	//TODO: create logic for placeholder pull secret
-
 	// Get cluster clusterName instead of reference to ACP clusterName
 	clusterDeployment := &hivev1.ClusterDeployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -42,7 +35,7 @@ func GetClusterDeploymentFromConfig(acp *v1alpha1.AgentControlPlane, clusterName
 			//ClusterInstallRef: // reference to AgentClusterInstall  *ClusterInstallLocalReference
 			// ClusterPoolRef *ClusterPoolReference `json:"clusterPoolRef,omitempty"`,
 			// ClusterPoolRef *ClusterPoolReference `json:"clusterPoolRef,omitempty"`
-			PullSecretRef: pullSecret,
+			PullSecretRef: acp.Spec.AgentConfigSpec.PullSecretRef,
 		},
 	}
 	return clusterDeployment
