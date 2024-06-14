@@ -18,51 +18,256 @@ package controller
 
 import (
 	"context"
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
+	aimodels "github.com/openshift/assisted-service/models"
+	hivev1 "github.com/openshift/hive/apis/hive/v1"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-)
-
-const (
-	agentControlPlaneName = "test-resource"
-	clusterName           = "test-cluster"
-	namespace             = "test"
 )
 
 var _ = Describe("AgentClusterInstall Controller", func() {
-	ctx := context.Background()
-	//var controllerReconciler *AgentClusterInstallReconciler
-	var k8sClient client.Client
+	Context("When reconciling a resource", func() {
+		const (
+			agentControlPlaneName   = "test-controlplane"
+			clusterName             = "test-cluster"
+			namespace               = "test-namespace"
+			agentClusterInstallName = "test-aci"
+			adminKubeconfigSecret   = "test-admin-kubeconfig"
+			kubeconfigSecret        = clusterName + "-kubeconfig"
+		)
+		var (
+			ctx               = context.Background()
+			aciNamespacedName types.NamespacedName
+			agentControlPlane *controlplanev1alpha1.AgentControlPlane
+			aci               *hiveext.AgentClusterInstall
+			reconciler        *AgentClusterInstallReconciler
+			mockCtrl          *gomock.Controller
+			k8sClient         client.Client
+		)
 
-	BeforeEach(func() {
-		k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
-			WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
-			Build()
-		Expect(k8sClient).NotTo(BeNil())
-		/*
-			controllerReconciler = &AgentClusterInstallReconciler{
+		BeforeEach(func() {
+			mockCtrl = gomock.NewController(GinkgoT())
+			k8sClient = fakeclient.NewClientBuilder().
+				WithScheme(testScheme).
+				WithStatusSubresource(&controlplanev1alpha1.AgentControlPlane{}, &hiveext.AgentClusterInstall{}).
+				Build()
+			Expect(k8sClient).NotTo(BeNil())
+			aciNamespacedName = types.NamespacedName{
+				Name:      agentClusterInstallName,
+				Namespace: namespace,
+			}
+
+			reconciler = &AgentClusterInstallReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
 
-		*/
-		ns := &corev1.Namespace{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-			},
-		}
-		By("creating the test namespace")
-		Expect(k8sClient.Create(ctx, ns)).To(Succeed())
-	})
+			agentControlPlane = &controlplanev1alpha1.AgentControlPlane{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "AgentControlPlane",
+					APIVersion: controlplanev1alpha1.GroupVersion.String(),
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      agentControlPlaneName,
+					Namespace: namespace,
+					Labels: map[string]string{
+						clusterv1.ClusterNameLabel: clusterName,
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
-	AfterEach(func() {
-		k8sClient = nil
-		//controllerReconciler = nil
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+			aci = generateAgentClusterInstall(agentClusterInstallName, namespace)
+			Expect(k8sClient.Create(ctx, aci)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			mockCtrl.Finish()
+		})
+
+		It("should return an error when the AgentClusterInstall doesn't have an AgentControlPlane owner", func() {
+			By("Reconciling the AgentClusterInstall")
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should reconcile successfully when the AgentClusterInstall has an AgentControlPlane owner", func() {
+			By("Updating the AgentClusterInstall to have an AgentControlPlane owner")
+			Expect(controllerutil.SetOwnerReference(agentControlPlane, aci, k8sClient.Scheme())).To(Succeed())
+			Expect(k8sClient.Update(ctx, aci)).To(Succeed())
+
+			By("Reconciling the AgentClusterInstall")
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{}))
+		})
+
+		It("should not change the status of the AgentControlPlane when the AgentClusterInstall doesn't have a kubeconfig reference", func() {
+			By("Updating the AgentClusterInstall's status")
+			controllerutil.SetOwnerReference(agentControlPlane, aci, k8sClient.Scheme())
+			Expect(k8sClient.Update(ctx, aci)).To(Succeed())
+			aci.Status.DebugInfo.State = aimodels.HostStatusInstalling
+			Expect(k8sClient.Status().Update(ctx, aci)).To(Succeed())
+
+			By("Reconciling the AgentClusterInstall")
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{}))
+
+			By("Checking that the AgentControlPlane status was not changed")
+			acp := &controlplanev1alpha1.AgentControlPlane{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: agentControlPlaneName, Namespace: namespace}, acp)).To(Succeed())
+			Expect(acp.Status.Initialized).NotTo(BeTrue())
+			Expect(acp.Status.Ready).NotTo(BeTrue())
+		})
+
+		It("should fail to reconcile when the kubeconfig reference is set but the secret doesn't exist", func() {
+			By("Updating the AgentClusterInstall's kubeconfig reference")
+			controllerutil.SetOwnerReference(agentControlPlane, aci, k8sClient.Scheme())
+			aci.Spec.ClusterMetadata = &hivev1.ClusterMetadata{
+				AdminKubeconfigSecretRef: corev1.LocalObjectReference{
+					Name: adminKubeconfigSecret,
+				},
+			}
+			Expect(k8sClient.Update(ctx, aci)).To(Succeed())
+
+			By("Reconciling the AgentClusterInstall")
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{}))
+
+			By("Checking that the cluster Kubeconfig secret didn't get created")
+			kubeconfig := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: kubeconfigSecret, Namespace: namespace}, kubeconfig)).NotTo(Succeed())
+
+			By("Checking that the AgentControlPlane status was not changed")
+			acp := &controlplanev1alpha1.AgentControlPlane{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: agentControlPlaneName, Namespace: namespace}, acp)).To(Succeed())
+			Expect(acp.Status.Initialized).NotTo(BeTrue())
+			Expect(acp.Status.Ready).NotTo(BeTrue())
+		})
+
+		It("should succesfully reconcile when the kubeconfig reference is set", func() {
+			By("Updating the AgentClusterInstall's kubeconfig reference")
+			controllerutil.SetOwnerReference(agentControlPlane, aci, k8sClient.Scheme())
+			aci.Spec.ClusterMetadata = &hivev1.ClusterMetadata{
+				AdminKubeconfigSecretRef: corev1.LocalObjectReference{
+					Name: adminKubeconfigSecret,
+				},
+			}
+			Expect(k8sClient.Update(ctx, aci)).To(Succeed())
+
+			By("Creating the admin kubeconfig secret")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      adminKubeconfigSecret,
+					Namespace: namespace,
+				},
+				Data: map[string][]byte{
+					"kubeconfig": []byte("test-kubeconfig-data"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			By("Reconciling the AgentClusterInstall")
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{}))
+
+			By("Checking that the cluster Kubeconfig secret was created")
+			kubeconfig := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: kubeconfigSecret, Namespace: namespace}, kubeconfig)).To(Succeed())
+
+			By("Ensuring the cluster label exists on both kubeconfig secrets")
+			updatedSecret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: adminKubeconfigSecret, Namespace: namespace}, updatedSecret)).To(Succeed())
+
+			Expect(updatedSecret.Labels).To(HaveKeyWithValue(clusterv1.ClusterNameLabel, clusterName))
+			Expect(kubeconfig.Labels).To(HaveKeyWithValue(clusterv1.ClusterNameLabel, clusterName))
+
+			By("Checking that the AgentControlPlane status is correct")
+			acp := &controlplanev1alpha1.AgentControlPlane{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: agentControlPlaneName, Namespace: namespace}, acp)).To(Succeed())
+			Expect(acp.Status.Initialized).To(BeTrue())
+			Expect(acp.Status.Ready).NotTo(BeTrue())
+		})
+
+		It("should set the AgentControlPlane to ready when the AgentClusterInstall has finished installing", func() {
+			By("Updating the AgentClusterInstall's kubeconfig reference")
+			controllerutil.SetOwnerReference(agentControlPlane, aci, k8sClient.Scheme())
+			aci.Spec.ClusterMetadata = &hivev1.ClusterMetadata{
+				AdminKubeconfigSecretRef: corev1.LocalObjectReference{
+					Name: adminKubeconfigSecret,
+				},
+			}
+			Expect(k8sClient.Update(ctx, aci)).To(Succeed())
+
+			By("Creating the admin kubeconfig secret")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      adminKubeconfigSecret,
+					Namespace: namespace,
+				},
+				Data: map[string][]byte{
+					"kubeconfig": []byte("test-kubeconfig-data"),
+				},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+
+			By("Updating the AgentClusterInstall's status")
+			aci.Status.DebugInfo.State = aimodels.ClusterStatusAddingHosts
+			Expect(k8sClient.Status().Update(ctx, aci)).To(Succeed())
+
+			By("Reconciling the AgentClusterInstall")
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: aciNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res).To(Equal(ctrl.Result{}))
+
+			By("Checking that the AgentControlPlane status is correct")
+			acp := &controlplanev1alpha1.AgentControlPlane{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: agentControlPlaneName, Namespace: namespace}, acp)).To(Succeed())
+			Expect(acp.Status.Initialized).To(BeTrue())
+			Expect(acp.Status.Ready).To(BeTrue())
+		})
 	})
 })
+
+func generateAgentClusterInstall(name, namespace string) *hiveext.AgentClusterInstall {
+	aci := &hiveext.AgentClusterInstall{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: hiveext.AgentClusterInstallSpec{},
+	}
+	return aci
+}
