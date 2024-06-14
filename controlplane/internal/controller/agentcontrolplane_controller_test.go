@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -87,7 +88,7 @@ var _ = Describe("AgentControlPlane Controller", func() {
 		It("should successfully create a cluster deployment when a cluster owns this agent control plane", func() {
 			By("setting the cluster as the owner ref on the agent control plane")
 
-			agentControlPlane := getAgentControlPlane()
+			agentControlPlane := getAgentControlPlane(agentControlPlaneName, namespace)
 			agentControlPlane.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))})
 			Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
@@ -111,7 +112,7 @@ var _ = Describe("AgentControlPlane Controller", func() {
 		It("should add a finalizer to the agent control plane if it's not being deleted", func() {
 			By("setting the owner ref on the agent control plane")
 
-			agentControlPlane := getAgentControlPlane()
+			agentControlPlane := getAgentControlPlane(agentControlPlaneName, namespace)
 			agentControlPlane.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))})
 			Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
@@ -127,10 +128,10 @@ var _ = Describe("AgentControlPlane Controller", func() {
 	})
 })
 
-func getAgentControlPlane() *controlplanev1alpha1.AgentControlPlane {
+func getAgentControlPlane(name, namespace string) *controlplanev1alpha1.AgentControlPlane {
 	return &controlplanev1alpha1.AgentControlPlane{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      agentControlPlaneName,
+			Name:      name,
 			Namespace: namespace,
 		},
 	}
