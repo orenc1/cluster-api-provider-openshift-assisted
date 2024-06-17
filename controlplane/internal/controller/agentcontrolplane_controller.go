@@ -177,6 +177,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				return
 			}
 			acp.Status.ClusterDeploymentRef = ref
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
 		}
 	}
 	// Retrieve clusterdeployment
@@ -465,7 +466,7 @@ func (r *AgentControlPlaneReconciler) ensurePullSecret(ctx context.Context, acp 
 		return err
 	}
 	acp.Spec.AgentConfigSpec.PullSecretRef = &corev1.LocalObjectReference{Name: secret.Name}
-	return r.Client.Update(ctx, acp)
+	return nil
 }
 
 // Assisted-service expects the pull secret to
