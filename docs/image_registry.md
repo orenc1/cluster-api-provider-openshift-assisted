@@ -34,14 +34,15 @@ Additional image registries for the workload cluster encapsulates mirror registr
 
 2. Add or update the `AgentControlPlane` CR to point to this `ConfigMap`
     ```yaml
-    apiVersion: 
+    apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
     kind: AgentControlPlane
     metadata:
       name: example-cluster
       namespace: example-cluster
     spec:
-      imageRegistryRef:
-        name: mirror-registry-config
+      agentConfigSpec:
+        imageRegistryRef:
+          name: mirror-registry-config
     ```
 
 ## Details
