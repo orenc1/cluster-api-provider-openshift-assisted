@@ -60,7 +60,7 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		BeforeEach(func() {
 			mockCtrl = gomock.NewController(GinkgoT())
-			registryRefCM = generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, false), certificate)
+			registryRefCM = generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, false, false), certificate)
 		})
 
 		AfterEach(func() {
@@ -94,17 +94,18 @@ var _ = Describe("ImageRegistry Test", func() {
 
 			By("Checking the ConfigMap contains the correct data")
 			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-			Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageTagMirrorSetKey))
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageDigestMirrorSetKey))
 			Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
-			Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
 			Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
-			Expect(imageRegistryConfigMap.Data[imageConfigKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
 			Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
 		})
 
 		It("successfully creates the image registry configmap with an insecure registry", func() {
-			By("Updating the user created ConfigMap to remove the mirror registry")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, true), certificate)
+			By("Updating the user created ConfigMap to use an insecure registry")
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, true, false), certificate)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
@@ -123,17 +124,47 @@ var _ = Describe("ImageRegistry Test", func() {
 
 			By("Checking the ConfigMap contains the correct data")
 			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-			Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageTagMirrorSetKey))
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageDigestMirrorSetKey))
 			Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
-			Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
 			Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
-			Expect(imageRegistryConfigMap.Data[imageConfigKey]).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
+			Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
+		})
+
+		It("successfully creates the image registry configmap that pulls from tag", func() {
+			By("Updating the user created ConfigMap to remove the mirror registry")
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, false, true), certificate)
+			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
+
+			By("Calling the CreateConfig function")
+			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(configMapName).To(Equal(imageConfigMapName))
+
+			By("Checking that the ConfigMap was created")
+			imageRegistryConfigMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).To(Succeed())
+
+			expectedImageTagMirrorSet := getImagTagMirrorSetString(sourceRegistry, []string{mirrorRegistry})
+			expectedClusterImage := getImageConfigString(registryCertConfigMapName, []string{})
+			expectedCertificateCM := getCMString(registryCertConfigMapName, registryCertConfigMapNamespace, map[string]string{registryCertKey: certificate})
+
+			By("Checking the ConfigMap contains the correct data")
+			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
+			Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageDigestMirrorSetKey))
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageTagMirrorSetKey))
+			Expect(imageRegistryConfigMap.Data[imageTagMirrorSetKey]).To(Equal(expectedImageTagMirrorSet))
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
+			Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
+			Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
 			Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
 		})
 
 		It("fails to create the image registry configmap when the mirror registry is missing", func() {
 			By("Updating the user created ConfigMap to remove the mirror registry")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, "", false), certificate)
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, "", false, false), certificate)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
@@ -163,7 +194,7 @@ var _ = Describe("ImageRegistry Test", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).NotTo(Succeed())
 		})
 
-		It("successfully creates the image registry configmap when there are no additional certificates to be added", func() {
+		It("successfully creates the image registry configmap when there are no additional certificates", func() {
 			By("Updating the user created ConfigMap to remove the certificate")
 			newRegistryCM := registryRefCM.DeepCopy()
 			delete(newRegistryCM.Data, registryCertKey)
@@ -220,7 +251,7 @@ var _ = Describe("ImageRegistry Test", func() {
 	})
 })
 
-func getRegistryToml(source, mirror string, insecure bool) string {
+func getRegistryToml(source, mirror string, insecure, pullByTag bool) string {
 	registryToml := ""
 	if source != "" {
 		registryToml = fmt.Sprintf("[[registry]]\nlocation = \"%s\"", source)
@@ -230,6 +261,9 @@ func getRegistryToml(source, mirror string, insecure bool) string {
 	}
 	if insecure {
 		registryToml = fmt.Sprintf("%s\ninsecure = true", registryToml)
+	}
+	if pullByTag {
+		registryToml = fmt.Sprintf("%s\npull-from-mirror = \"tag-only\"", registryToml)
 	}
 	return registryToml
 }
@@ -272,6 +306,28 @@ func getImageDigestMirrorSetString(source string, mirrors []string) string {
 		},
 	})
 	return string(expectedImageDigestMirrorSet)
+}
+
+func getImagTagMirrorSetString(source string, mirrors []string) string {
+	imageTagMirror := configv1.ImageTagMirrors{}
+	if source != "" {
+		imageTagMirror.Source = source
+	}
+	for _, mirror := range mirrors {
+		imageTagMirror.Mirrors = append(imageTagMirror.Mirrors, configv1.ImageMirror(mirror))
+	}
+
+	expectedImageTagMirrorSet, _ := json.Marshal(configv1.ImageTagMirrorSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ImageTagMirrorSet",
+			APIVersion: configv1.GroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{Name: imageRegistryName},
+		Spec: configv1.ImageTagMirrorSetSpec{
+			ImageTagMirrors: []configv1.ImageTagMirrors{imageTagMirror},
+		},
+	})
+	return string(expectedImageTagMirrorSet)
 }
 
 func getImageConfigString(certCMName string, insecureRegistries []string) string {
