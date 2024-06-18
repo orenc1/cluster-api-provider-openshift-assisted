@@ -18,8 +18,9 @@ package controller
 
 import (
 	"context"
-	"github.com/openshift-assisted/cluster-api-agent/util"
 	"time"
+
+	"github.com/openshift-assisted/cluster-api-agent/util"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
@@ -193,7 +194,10 @@ func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.Cl
 
 func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment, acp v1alpha1.AgentControlPlane, cluster *clusterv1.Cluster, imageSet *hivev1.ClusterImageSet, workerNodes int) (*hiveext.AgentClusterInstall, error) {
 	log := ctrl.LoggerFrom(ctx)
-	aci := r.computeAgentClusterInstall(ctx, clusterDeployment, acp, imageSet, cluster, workerNodes)
+	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, acp, imageSet, cluster, workerNodes)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, aci, func() error { return nil }); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			log.Info("failed to create agent cluster install for ClusterDeployment", "name", clusterDeployment.Name, "namespace", clusterDeployment.Namespace)
@@ -203,7 +207,7 @@ func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(ctx cont
 	return aci, nil
 }
 
-func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment, acp v1alpha1.AgentControlPlane, imageSet *hivev1.ClusterImageSet, cluster *clusterv1.Cluster, workerReplicas int) *hiveext.AgentClusterInstall {
+func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment, acp v1alpha1.AgentControlPlane, imageSet *hivev1.ClusterImageSet, cluster *clusterv1.Cluster, workerReplicas int) (*hiveext.AgentClusterInstall, error) {
 	log := ctrl.LoggerFrom(ctx)
 	var clusterNetwork []hiveext.ClusterNetworkEntry
 
@@ -225,6 +229,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(ctx context.Con
 		imageRegistryManifest, err := imageregistry.CreateConfig(ctx, r.Client, acp.Spec.AgentConfigSpec.ImageRegistryRef, clusterDeployment.Namespace)
 		if err != nil {
 			log.Error(err, "failed to create image registry config manifest")
+			return nil, err
 		} else {
 			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageRegistryManifest})
 		}
@@ -258,5 +263,5 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(ctx context.Con
 			ManifestsConfigMapRefs: additionalManifests,
 		},
 	}
-	return aci
+	return aci, nil
 }
