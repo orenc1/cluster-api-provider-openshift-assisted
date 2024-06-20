@@ -81,4 +81,55 @@ During the cluster installation, each data entry in the `ConfigMap` will be crea
 |---------------|----------|---------------|-----------------------|-------------|
 | additional-registry-certificate | openshift-config | ConfigMap | additional-registry-certificate.json | Provides the additional certificates for the image registry |
 | cluster | | Image.config.openshift.io | image-config.json | References the additional certificate for the image registry |
-| additional-registry | | ImageDigestMirrorSet | image-digest-mirror-set.json | Provides the alternative registry to pull images from |
+| additional-registry | | `ImageDigestMirrorSet` or `ImageTagMirrorSet` | `image-digest-mirror-set.json` or `image-tag-mirror-set.json` | Provides the alternative registry to pull images from |
+
+## Pulling via Tag
+
+In the `ConfigMap` CR, ensure that the `registry.mirror` section of the `registries.conf` provided has the `pull-from-mirror` set to `"tag-only"`.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirror-registry-config
+  namespace: example-cluster
+data:
+  registries.conf: |
+    unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+
+    [[registry]]
+    prefix = ""
+    location = "quay.io/example"
+
+      [[registry.mirror]]
+      location = "10.1.178.25:5000/example"
+      pull-from-mirror = "tag-only"
+```
+
+The controller will create an `ImageTagMirrorSet` CR instead of an `ImageDigestMirrorSet` CR in the spoke cluster. 
+By default, if the `pull-from-mirror` is not specified, the controller will assume it will pull by digest and create an `ImageDigestMirrorSet` CR.
+
+## Pulling from insecure registries
+
+To use an insecure connection, set `insecure` to `true` in the `ConfigMap` CR like so:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mirror-registry-config
+  namespace: example-cluster
+data:
+  registries.conf: |
+    unqualified-search-registries = ["registry.access.redhat.com", "docker.io"]
+
+    [[registry]]
+    prefix = ""
+    location = "quay.io/example"
+
+      [[registry.mirror]]
+      location = "10.1.178.25:5000/example"
+      insecure = true
+```
+
+The above example will allow insecure connections to the registry `10.1.178.25:5000/example`
