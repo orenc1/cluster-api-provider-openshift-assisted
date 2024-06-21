@@ -688,11 +688,26 @@ rules:
 - apiGroups:
   - cluster.x-k8s.io
   resources:
+  - clusters
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
   - machinedeployments
   - machinedeployments/status
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - machines
+  verbs:
+  - get
   - watch
 - apiGroups:
   - cluster.x-k8s.io
@@ -719,13 +734,10 @@ rules:
   - extensions.hive.openshift.io
   resources:
   - agentclusterinstalls
+  - agentclusterinstalls/status
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - extensions.hive.openshift.io
@@ -745,6 +757,7 @@ rules:
   - infrastructure.cluster.x-k8s.io
   resources:
   - metal3machines
+  - metal3machines/status
   verbs:
   - create
   - delete
@@ -757,15 +770,10 @@ rules:
   - infrastructure.cluster.x-k8s.io
   resources:
   - metal3machines
-  - metal3machines/status
+  - metal3machinetemplates
   verbs:
-  - create
-  - delete
   - get
-  - list
-  - patch
   - update
-  - watch
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
