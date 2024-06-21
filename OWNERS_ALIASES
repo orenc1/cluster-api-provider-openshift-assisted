@@ -1,0 +1,11 @@
+# See the OWNERS docs at https://go.k8s.io/owners
+
+aliases:
+  approvers:
+    - openshift-edge-bot
+    - eranco74
+    - gamli75
+    - carbonin
+    - rccrdpccl
+    - adriengentil
+    - CrystalChun
