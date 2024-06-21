@@ -89,6 +89,7 @@ var _ = Describe("AgentBootstrapConfigSpec Controller", func() {
 		var k8sClient client.Client
 
 		BeforeEach(func() {
+			By("Resetting fakeclient state")
 			k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
 				WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
 				Build()

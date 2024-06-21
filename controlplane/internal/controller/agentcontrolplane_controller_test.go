@@ -120,7 +120,7 @@ var _ = Describe("AgentControlPlane Controller", func() {
 			})
 		})
 
-		When("when a cluster owns this agent control plane", func() {
+		When("a cluster owns this agent control plane", func() {
 			It("should successfully create a cluster deployment and match AgentControlPlane properties", func() {
 				By("setting the cluster as the owner ref on the agent control plane")
 
