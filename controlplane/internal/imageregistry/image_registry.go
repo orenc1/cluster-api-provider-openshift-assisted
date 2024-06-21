@@ -33,7 +33,12 @@ const (
 // a ConfigMap containing the additional trusted certificates for the mirror registry, and an image.config.openshift.io
 // CR that references the ConfigMap with the additional trusted certificate.
 // Successful creation of the ConfigMap will return the name of the created ConfigMap to be added as a manifest reference
-func CreateConfig(ctx context.Context, client client.Client, registryRef *corev1.LocalObjectReference, namespace string) (string, error) {
+func CreateConfig(
+	ctx context.Context,
+	client client.Client,
+	registryRef *corev1.LocalObjectReference,
+	namespace string,
+) (string, error) {
 	imageRegistryConfigMap := &corev1.ConfigMap{}
 	if err := client.Get(ctx, types.NamespacedName{Name: registryRef.Name, Namespace: namespace}, imageRegistryConfigMap); err != nil {
 		return "", err
@@ -44,7 +49,8 @@ func CreateConfig(ctx context.Context, client client.Client, registryRef *corev1
 		return "", err
 	}
 
-	if _, err := ctrl.CreateOrUpdate(ctx, client, additionalRegistryConfigMap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
+	if _, err := ctrl.CreateOrUpdate(ctx, client, additionalRegistryConfigMap, func() error { return nil }); err != nil &&
+		!apierrors.IsAlreadyExists(err) {
 		return "", err
 	}
 	return additionalRegistryConfigMap.Name, nil
@@ -55,7 +61,12 @@ func createImageRegistryConfig(imageRegistry *corev1.ConfigMap, namespace string
 
 	registryConf, ok := imageRegistry.Data[registryConfKey]
 	if !ok {
-		return nil, fmt.Errorf("failed to find registry key [%s] in configmap %s/%s for image registry configuration", registryConfKey, imageRegistry.Name, namespace)
+		return nil, fmt.Errorf(
+			"failed to find registry key [%s] in configmap %s/%s for image registry configuration",
+			registryConfKey,
+			imageRegistry.Name,
+			namespace,
+		)
 	}
 
 	imageDigestMirrors, imageTagMirrors, insecureRegistries, err := getImageRegistries(registryConf)
@@ -153,7 +164,13 @@ func getImageRegistries(registry string) (string, string, []string, error) {
 
 // parseMirrorRegistries takes a mirror registry toml tree and parses it into
 // a list of image mirrors and a string list of insecure mirror registries.
-func parseMirrorRegistries(idmsMirrors *[]configv1.ImageDigestMirrors, itmsMirrors *[]configv1.ImageTagMirrors, mirrorTrees []*toml.Tree, insecureRegistries *[]string, source string) {
+func parseMirrorRegistries(
+	idmsMirrors *[]configv1.ImageDigestMirrors,
+	itmsMirrors *[]configv1.ImageTagMirrors,
+	mirrorTrees []*toml.Tree,
+	insecureRegistries *[]string,
+	source string,
+) {
 	itmsMirror := configv1.ImageTagMirrors{}
 	idmsMirror := configv1.ImageDigestMirrors{}
 	for _, mirrorTree := range mirrorTrees {

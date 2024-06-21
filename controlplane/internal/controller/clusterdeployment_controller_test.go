@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	"github.com/openshift-assisted/cluster-api-agent/test/utils"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"

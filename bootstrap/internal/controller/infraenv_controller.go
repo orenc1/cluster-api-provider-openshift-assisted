@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -49,9 +50,6 @@ func (r *InfraEnvReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, err
 	}
-	if infraEnv == nil {
-		return ctrl.Result{}, nil
-	}
 	clusterName, ok := infraEnv.Labels[clusterv1.ClusterNameLabel]
 	if !ok {
 		return ctrl.Result{}, nil
@@ -71,20 +69,46 @@ func (r *InfraEnvReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	log.Info("Found AgentBootstrapConfig for InfraEnv", "infra_env_name", infraEnv.Name, "agent_bootstrap_config_count", len(agentBootstrapConfigs.Items))
+	log.Info(
+		"Found AgentBootstrapConfig for InfraEnv",
+		"infra_env_name",
+		infraEnv.Name,
+		"agent_bootstrap_config_count",
+		len(agentBootstrapConfigs.Items),
+	)
 
 	for _, agentBootstrapConfig := range agentBootstrapConfigs.Items {
-		if agentBootstrapConfig.Status.InfraEnvRef != nil && agentBootstrapConfig.Status.InfraEnvRef.Name != infraEnv.Name {
-			log.Info("InfraEnvRef on agentbootstrap config doesn't match infraenv found", "agentBootstrap.InfraEnvRef", agentBootstrapConfig.Status.InfraEnvRef.Name, "infra env", infraEnv.Name)
+		if agentBootstrapConfig.Status.InfraEnvRef != nil &&
+			agentBootstrapConfig.Status.InfraEnvRef.Name != infraEnv.Name {
+			log.Info(
+				"InfraEnvRef on agentbootstrap config doesn't match infraenv found",
+				"agentBootstrap.InfraEnvRef",
+				agentBootstrapConfig.Status.InfraEnvRef.Name,
+				"infra env",
+				infraEnv.Name,
+			)
 			//
 			continue
 		}
-		log.Info("Adding ISO URL to AgentBootstrapConfig", "ISO URL", infraEnv.Status.ISODownloadURL, "agent_bootstrap_config", agentBootstrapConfig.Name)
+		log.Info(
+			"Adding ISO URL to AgentBootstrapConfig",
+			"ISO URL",
+			infraEnv.Status.ISODownloadURL,
+			"agent_bootstrap_config",
+			agentBootstrapConfig.Name,
+		)
 		// Add ISO to agentBootstrapConfig status
 		agentBootstrapConfig.Status.ISODownloadURL = infraEnv.Status.ISODownloadURL
 
 		if err := r.Client.Status().Update(ctx, &agentBootstrapConfig); err != nil {
-			log.Error(err, "couldn't update agentbootstrapconfig with iso url", "infra env name", infraEnv.Name, "config", agentBootstrapConfig.Name)
+			log.Error(
+				err,
+				"couldn't update agentbootstrapconfig with iso url",
+				"infra env name",
+				infraEnv.Name,
+				"config",
+				agentBootstrapConfig.Name,
+			)
 			return ctrl.Result{}, err
 		}
 	}

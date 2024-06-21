@@ -95,7 +95,11 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	agent.Spec.NodeLabels = map[string]string{metal3ProviderIDLabelKey: getProviderID(bmh)}
 	if machine.Spec.Bootstrap.ConfigRef == nil {
 		log.V(logutil.TraceLevel).Info("Agent's machine not associated with agent bootstrap config")
-		return ctrl.Result{}, fmt.Errorf("machine %s/%s does not have any bootstrap config ref", machine.Namespace, machine.Name)
+		return ctrl.Result{}, fmt.Errorf(
+			"machine %s/%s does not have any bootstrap config ref",
+			machine.Namespace,
+			machine.Name,
+		)
 	}
 
 	config := &bootstrapv1alpha1.AgentBootstrapConfig{}
@@ -174,7 +178,10 @@ func getIngitionConfigOverride() string {
 	return ignition
 }
 
-func (r *AgentReconciler) getMachineFromBMH(ctx context.Context, bmh *metal3v1alpha1.BareMetalHost) (*clusterv1.Machine, error) {
+func (r *AgentReconciler) getMachineFromBMH(
+	ctx context.Context,
+	bmh *metal3v1alpha1.BareMetalHost,
+) (*clusterv1.Machine, error) {
 	m3machine, err := r.getMetal3MachineFromBMH(ctx, bmh)
 	if err != nil {
 		return nil, err
@@ -182,12 +189,25 @@ func (r *AgentReconciler) getMachineFromBMH(ctx context.Context, bmh *metal3v1al
 	return r.getMachineFromMetal3Machine(ctx, m3machine)
 }
 
-func (r *AgentReconciler) getMachineFromMetal3Machine(ctx context.Context, m3machine *metal3.Metal3Machine) (*clusterv1.Machine, error) {
+func (r *AgentReconciler) getMachineFromMetal3Machine(
+	ctx context.Context,
+	m3machine *metal3.Metal3Machine,
+) (*clusterv1.Machine, error) {
 	log := ctrl.LoggerFrom(ctx)
 
 	machine := clusterv1.Machine{}
 	for _, ref := range m3machine.OwnerReferences {
-		log.Info("comparing owner to machine", "refKind", ref.Kind, "refAPIVersion", ref.APIVersion, "machineKind", machine.Kind, "machineAPIversion", machine.APIVersion)
+		log.Info(
+			"comparing owner to machine",
+			"refKind",
+			ref.Kind,
+			"refAPIVersion",
+			ref.APIVersion,
+			"machineKind",
+			machine.Kind,
+			"machineAPIversion",
+			machine.APIVersion,
+		)
 		// TODO: set it as constant
 		if ref.Kind == "Machine" && ref.APIVersion == clusterv1.GroupVersion.String() {
 			if err := r.Client.Get(ctx, types.NamespacedName{
@@ -203,7 +223,10 @@ func (r *AgentReconciler) getMachineFromMetal3Machine(ctx context.Context, m3mac
 	return nil, fmt.Errorf("no machine found for metal3machine %s/%s", m3machine.Namespace, m3machine.Name)
 }
 
-func (r *AgentReconciler) getMetal3MachineFromBMH(ctx context.Context, bmh *metal3v1alpha1.BareMetalHost) (*metal3.Metal3Machine, error) {
+func (r *AgentReconciler) getMetal3MachineFromBMH(
+	ctx context.Context,
+	bmh *metal3v1alpha1.BareMetalHost,
+) (*metal3.Metal3Machine, error) {
 	ml := metal3.Metal3MachineList{}
 	if err := r.Client.List(ctx, &ml); err != nil {
 		return nil, err
@@ -225,18 +248,26 @@ func (r *AgentReconciler) getMetal3MachineFromBMH(ctx context.Context, bmh *meta
 	return nil, fmt.Errorf("found %d metal3machines, none matching BMH %s/%s", len(ml.Items), bmh.Namespace, bmh.Name)
 }
 
-func (r *AgentReconciler) getBMHFromAgent(ctx context.Context, agent *aiv1beta1.Agent) (*metal3v1alpha1.BareMetalHost, error) {
+func (r *AgentReconciler) getBMHFromAgent(
+	ctx context.Context,
+	agent *aiv1beta1.Agent,
+) (*metal3v1alpha1.BareMetalHost, error) {
 	bmhs := &metal3v1alpha1.BareMetalHostList{}
 	if err := r.Client.List(ctx, bmhs); err != nil {
 		return nil, err
 	}
 	for _, bmh := range bmhs.Items {
 		for _, agentInterface := range agent.Status.Inventory.Interfaces {
-			if agentInterface.MacAddress != "" && strings.EqualFold(bmh.Spec.BootMACAddress, agentInterface.MacAddress) {
+			if agentInterface.MacAddress != "" &&
+				strings.EqualFold(bmh.Spec.BootMACAddress, agentInterface.MacAddress) {
 				return &bmh, nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("found %d BMHs, and none matched any MacAddress from the agent's %d interfaces", len(bmhs.Items), len(agent.Status.Inventory.Interfaces))
+	return nil, fmt.Errorf(
+		"found %d BMHs, and none matched any MacAddress from the agent's %d interfaces",
+		len(bmhs.Items),
+		len(agent.Status.Inventory.Interfaces),
+	)
 }

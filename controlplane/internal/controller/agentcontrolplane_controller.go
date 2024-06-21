@@ -20,14 +20,14 @@ import (
 	"context"
 	"time"
 
+	"github.com/pkg/errors"
+
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
-
-	"github.com/pkg/errors"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -117,7 +117,7 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}()
 
 	if acp.DeletionTimestamp != nil {
-		return r.handleDeletion(ctx, acp)
+		return ctrl.Result{}, r.handleDeletion(ctx, acp)
 	}
 
 	if !controllerutil.ContainsFinalizer(acp, acpFinalizer) {
@@ -187,27 +187,31 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 // Deletes the ClusterDeployment (which deletes the AgentClusterInstall)
 // Machines, InfraMachines, and AgentBootstrapConfigs get auto-deleted when the ACP has a deletion timestamp - this deprovisions the BMH automatically
 // TODO: should we handle watching until all machines & agentbootstrapconfigs are deleted too?
-func (r *AgentControlPlaneReconciler) handleDeletion(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane) (ctrl.Result, error) {
+func (r *AgentControlPlaneReconciler) handleDeletion(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	if !controllerutil.ContainsFinalizer(acp, acpFinalizer) {
 		log.V(logutil.TraceLevel).Info("ACP doesn't contain finalizer, allow deletion")
-		return ctrl.Result{}, nil
+		return nil
 	}
 
 	// Delete cluster deployment
-	if err := r.deleteClusterDeployment(ctx, acp.Status.ClusterDeploymentRef); err != nil && !apierrors.IsNotFound(err) {
+	if err := r.deleteClusterDeployment(ctx, acp.Status.ClusterDeploymentRef); err != nil &&
+		!apierrors.IsNotFound(err) {
 		log.Error(err, "failed deleting cluster deployment for ACP")
-		return ctrl.Result{}, err
+		return err
 	}
 	acp.Status.ClusterDeploymentRef = nil
 
 	// will be updated in the deferred function
 	controllerutil.RemoveFinalizer(acp, acpFinalizer)
-	return ctrl.Result{}, nil
+	return nil
 }
 
-func (r *AgentControlPlaneReconciler) deleteClusterDeployment(ctx context.Context, clusterDeployment *corev1.ObjectReference) error {
+func (r *AgentControlPlaneReconciler) deleteClusterDeployment(
+	ctx context.Context,
+	clusterDeployment *corev1.ObjectReference,
+) error {
 	if clusterDeployment == nil {
 		return nil
 	}
@@ -220,7 +224,7 @@ func (r *AgentControlPlaneReconciler) deleteClusterDeployment(ctx context.Contex
 	return r.Client.Delete(ctx, cd)
 }
 
-func (r *AgentControlPlaneReconciler) computeDesiredMachine(acp *controlplanev1alpha1.AgentControlPlane, cluster *clusterv1.Cluster) (*clusterv1.Machine, error) {
+func (r *AgentControlPlaneReconciler) computeDesiredMachine(acp *controlplanev1alpha1.AgentControlPlane, cluster *clusterv1.Cluster) *clusterv1.Machine {
 	var machineName string
 	var machineUID types.UID
 	var version *string
@@ -288,7 +292,7 @@ func (r *AgentControlPlaneReconciler) computeDesiredMachine(acp *controlplanev1a
 	desiredMachine.Spec.NodeDeletionTimeout = acp.Spec.MachineTemplate.NodeDeletionTimeout
 	desiredMachine.Spec.NodeVolumeDetachTimeout = acp.Spec.MachineTemplate.NodeVolumeDetachTimeout
 
-	return desiredMachine, nil
+	return desiredMachine
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -299,7 +303,11 @@ func (r *AgentControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-func (r *AgentControlPlaneReconciler) ensureClusterDeployment(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane, clusterName string) error {
+func (r *AgentControlPlaneReconciler) ensureClusterDeployment(
+	ctx context.Context,
+	acp *controlplanev1alpha1.AgentControlPlane,
+	clusterName string,
+) error {
 	if acp.Status.ClusterDeploymentRef == nil {
 		clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, clusterName)
 		if err := r.Create(ctx, clusterDeployment); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -326,18 +334,22 @@ func (r *AgentControlPlaneReconciler) ensureClusterDeployment(ctx context.Contex
 	return nil
 }
 
-func (r *AgentControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx context.Context, cluster *clusterv1.Cluster, acp *controlplanev1alpha1.AgentControlPlane, bootstrapSpec *bootstrapv1alpha1.AgentBootstrapConfigSpec) error {
+func (r *AgentControlPlaneReconciler) cloneConfigsAndGenerateMachine(
+	ctx context.Context,
+	cluster *clusterv1.Cluster,
+	acp *controlplanev1alpha1.AgentControlPlane,
+	bootstrapSpec *bootstrapv1alpha1.AgentBootstrapConfigSpec,
+) error {
 	var errs []error
 
 	log := ctrl.LoggerFrom(ctx)
 
 	// Compute desired Machine
-	machine, err := r.computeDesiredMachine(acp, cluster)
-	if err != nil {
-		return errors.Wrap(err, "failed to create Machine: failed to compute desired Machine")
-	}
+	machine := r.computeDesiredMachine(acp, cluster)
 
-	controllerutil.SetOwnerReference(acp, machine, r.Scheme)
+	if err := controllerutil.SetOwnerReference(acp, machine, r.Scheme); err != nil {
+		return errors.Wrap(err, "failed to create Machine: failed to set OwnerRef to desired Machine")
+	}
 	// Since the cloned resource should eventually have a controller ref for the Machine, we create an
 	// OwnerReference here without the Controller field set
 	infraCloneOwner := &metav1.OwnerReference{
@@ -360,8 +372,13 @@ func (r *AgentControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx context
 	})
 	if err != nil {
 		// Safe to return early here since no resources have been created yet.
-		conditions.MarkFalse(acp, controlplanev1alpha1.MachinesCreatedCondition, controlplanev1alpha1.InfrastructureTemplateCloningFailedReason,
-			clusterv1.ConditionSeverityError, err.Error())
+		conditions.MarkFalse(
+			acp,
+			controlplanev1alpha1.MachinesCreatedCondition,
+			controlplanev1alpha1.InfrastructureTemplateCloningFailedReason,
+			clusterv1.ConditionSeverityError,
+			err.Error(),
+		)
 		return errors.Wrap(err, "failed to clone infrastructure template")
 	}
 	machine.Spec.InfrastructureRef = *infraRef
@@ -369,19 +386,30 @@ func (r *AgentControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx context
 	bootstrapRef, err := r.generateAgentBootstrapConfig(ctx, acp, cluster, bootstrapSpec, machine.Name)
 	if err != nil {
 		log.Error(err, "failed generating control plane bootstrap config")
-		conditions.MarkFalse(acp, controlplanev1alpha1.MachinesCreatedCondition, controlplanev1alpha1.BootstrapTemplateCloningFailedReason,
-			clusterv1.ConditionSeverityError, err.Error())
+		conditions.MarkFalse(
+			acp,
+			controlplanev1alpha1.MachinesCreatedCondition,
+			controlplanev1alpha1.BootstrapTemplateCloningFailedReason,
+			clusterv1.ConditionSeverityError,
+			err.Error(),
+		)
 		errs = append(errs, errors.Wrap(err, "failed to generate bootstrap config"))
 	}
 	// Only proceed to generating the Machine if we haven't encountered an error
 	if len(errs) == 0 {
 		machine.Spec.Bootstrap.ConfigRef = bootstrapRef
 		log.Info("Creating machine for cluster...", "cluster", cluster.Name)
-		if err := r.createMachine(ctx, acp, machine); err != nil {
+		if err := r.createMachine(ctx, machine); err != nil {
 			log.Info("Error creating machine config", "err", err)
-			conditions.MarkFalse(acp, controlplanev1alpha1.MachinesCreatedCondition, controlplanev1alpha1.MachineGenerationFailedReason,
-				clusterv1.ConditionSeverityError, err.Error())
+			conditions.MarkFalse(
+				acp,
+				controlplanev1alpha1.MachinesCreatedCondition,
+				controlplanev1alpha1.MachineGenerationFailedReason,
+				clusterv1.ConditionSeverityError,
+				err.Error(),
+			)
 			errs = append(errs, errors.Wrap(err, "failed to create Machine"))
+			return kerrors.NewAggregate(errs)
 		}
 	}
 	/*
@@ -397,7 +425,7 @@ func (r *AgentControlPlaneReconciler) cloneConfigsAndGenerateMachine(ctx context
 	return nil
 }
 
-func (r *AgentControlPlaneReconciler) createMachine(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane, machine *clusterv1.Machine) error {
+func (r *AgentControlPlaneReconciler) createMachine(ctx context.Context, machine *clusterv1.Machine) error {
 	if err := r.Client.Create(ctx, machine); err != nil {
 		return errors.Wrap(err, "failed to create Machine")
 	}
@@ -408,7 +436,13 @@ func (r *AgentControlPlaneReconciler) createMachine(ctx context.Context, acp *co
 	return nil
 }
 
-func (r *AgentControlPlaneReconciler) generateAgentBootstrapConfig(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane, cluster *clusterv1.Cluster, spec *bootstrapv1alpha1.AgentBootstrapConfigSpec, name string) (*corev1.ObjectReference, error) {
+func (r *AgentControlPlaneReconciler) generateAgentBootstrapConfig(
+	ctx context.Context,
+	acp *controlplanev1alpha1.AgentControlPlane,
+	cluster *clusterv1.Cluster,
+	spec *bootstrapv1alpha1.AgentBootstrapConfigSpec,
+	name string,
+) (*corev1.ObjectReference, error) {
 	// Create an owner reference without a controller reference because the owning controller is the machine controller
 	owner := metav1.OwnerReference{
 		APIVersion: controlplanev1alpha1.GroupVersion.String(),
@@ -436,7 +470,10 @@ func (r *AgentControlPlaneReconciler) generateAgentBootstrapConfig(ctx context.C
 	return reference.GetReference(r.Scheme, bootstrapConfig)
 }
 
-func (r *AgentControlPlaneReconciler) ensurePullSecret(ctx context.Context, acp *controlplanev1alpha1.AgentControlPlane) error {
+func (r *AgentControlPlaneReconciler) ensurePullSecret(
+	ctx context.Context,
+	acp *controlplanev1alpha1.AgentControlPlane,
+) error {
 	if acp.Spec.AgentConfigSpec.PullSecretRef != nil {
 		return nil
 	}

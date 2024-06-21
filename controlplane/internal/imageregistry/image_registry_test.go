@@ -60,12 +60,21 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		BeforeEach(func() {
 			mockCtrl = gomock.NewController(GinkgoT())
-			registryRefCM = generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, false, false), certificate)
+			registryRefCM = generateUserProvidedRegistryCM(
+				providedCMName,
+				namespace,
+				getRegistryToml(sourceRegistry, mirrorRegistry, false, false),
+				certificate,
+			)
 		})
 
 		AfterEach(func() {
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			k8sClient.Get(ctx, types.NamespacedName{Name: imageConfigMapName, Namespace: namespace}, imageRegistryConfigMap)
+			k8sClient.Get(
+				ctx,
+				types.NamespacedName{Name: imageConfigMapName, Namespace: namespace},
+				imageRegistryConfigMap,
+			)
 			k8sClient.Delete(ctx, imageRegistryConfigMap)
 			mockCtrl.Finish()
 		})
@@ -80,17 +89,32 @@ var _ = Describe("ImageRegistry Test", func() {
 			Expect(k8sClient.Create(ctx, registryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(configMapName).To(Equal(imageConfigMapName))
 
 			By("Checking that the ConfigMap was created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).To(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).To(Succeed())
 
 			expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 			expectedClusterImage := getImageConfigString(registryCertConfigMapName, []string{})
-			expectedCertificateCM := getCMString(registryCertConfigMapName, registryCertConfigMapNamespace, map[string]string{registryCertKey: certificate})
+			expectedCertificateCM := getCMString(
+				registryCertConfigMapName,
+				registryCertConfigMapNamespace,
+				map[string]string{registryCertKey: certificate},
+			)
 
 			By("Checking the ConfigMap contains the correct data")
 			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
@@ -105,22 +129,42 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		It("successfully creates the image registry configmap with an insecure registry", func() {
 			By("Updating the user created ConfigMap to use an insecure registry")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, true, false), certificate)
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(
+				providedCMName,
+				namespace,
+				getRegistryToml(sourceRegistry, mirrorRegistry, true, false),
+				certificate,
+			)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(configMapName).To(Equal(imageConfigMapName))
 
 			By("Checking that the ConfigMap was created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).To(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).To(Succeed())
 
 			insecureRegistries := []string{mirrorRegistry}
 			expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 			expectedClusterImage := getImageConfigString(registryCertConfigMapName, insecureRegistries)
-			expectedCertificateCM := getCMString(registryCertConfigMapName, registryCertConfigMapNamespace, map[string]string{registryCertKey: certificate})
+			expectedCertificateCM := getCMString(
+				registryCertConfigMapName,
+				registryCertConfigMapNamespace,
+				map[string]string{registryCertKey: certificate},
+			)
 
 			By("Checking the ConfigMap contains the correct data")
 			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
@@ -135,21 +179,41 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		It("successfully creates the image registry configmap that pulls from tag", func() {
 			By("Updating the user created ConfigMap to remove the mirror registry")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, mirrorRegistry, false, true), certificate)
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(
+				providedCMName,
+				namespace,
+				getRegistryToml(sourceRegistry, mirrorRegistry, false, true),
+				certificate,
+			)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(configMapName).To(Equal(imageConfigMapName))
 
 			By("Checking that the ConfigMap was created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).To(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).To(Succeed())
 
 			expectedImageTagMirrorSet := getImagTagMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 			expectedClusterImage := getImageConfigString(registryCertConfigMapName, []string{})
-			expectedCertificateCM := getCMString(registryCertConfigMapName, registryCertConfigMapNamespace, map[string]string{registryCertKey: certificate})
+			expectedCertificateCM := getCMString(
+				registryCertConfigMapName,
+				registryCertConfigMapNamespace,
+				map[string]string{registryCertKey: certificate},
+			)
 
 			By("Checking the ConfigMap contains the correct data")
 			Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
@@ -164,34 +228,64 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		It("fails to create the image registry configmap when the mirror registry is missing", func() {
 			By("Updating the user created ConfigMap to remove the mirror registry")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, getRegistryToml(sourceRegistry, "", false, false), certificate)
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(
+				providedCMName,
+				namespace,
+				getRegistryToml(sourceRegistry, "", false, false),
+				certificate,
+			)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).To(HaveOccurred())
 			Expect(configMapName).To(BeEmpty())
 
 			By("Ensuring the ConfigMap wasn't created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)
+			err = k8sClient.Get(
+				ctx,
+				types.NamespacedName{Name: configMapName, Namespace: namespace},
+				imageRegistryConfigMap,
+			)
 			Expect(err).NotTo(BeNil())
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("fails to create the image registry configmap when the registry toml is not well-formatted", func() {
 			By("Updating the user created ConfigMap to use an incorrect registry toml")
-			updatedRegistryRefCM := generateUserProvidedRegistryCM(providedCMName, namespace, fmt.Sprintf("location=%s", sourceRegistry), certificate)
+			updatedRegistryRefCM := generateUserProvidedRegistryCM(
+				providedCMName,
+				namespace,
+				fmt.Sprintf("location=%s", sourceRegistry),
+				certificate,
+			)
 			Expect(k8sClient.Update(ctx, updatedRegistryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).To(HaveOccurred())
 			Expect(configMapName).To(BeEmpty())
 
 			By("Ensuring the ConfigMap wasn't created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).NotTo(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).NotTo(Succeed())
 		})
 
 		It("successfully creates the image registry configmap when there are no additional certificates", func() {
@@ -201,13 +295,24 @@ var _ = Describe("ImageRegistry Test", func() {
 			Expect(k8sClient.Update(ctx, newRegistryCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(configMapName).To(Equal(imageConfigMapName))
 
 			By("Checking that the ConfigMap was created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).To(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).To(Succeed())
 
 			expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 
@@ -224,30 +329,55 @@ var _ = Describe("ImageRegistry Test", func() {
 			Expect(k8sClient.Delete(ctx, registryRefCM)).To(Succeed())
 
 			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
+			configMapName, err := CreateConfig(
+				ctx,
+				k8sClient,
+				&corev1.LocalObjectReference{Name: registryRefCM.Name},
+				namespace,
+			)
 			Expect(err).To(HaveOccurred())
 			Expect(configMapName).To(BeEmpty())
 
 			By("Ensuring the ConfigMap wasn't created")
 			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).NotTo(Succeed())
+			Expect(
+				k8sClient.Get(
+					ctx,
+					types.NamespacedName{Name: configMapName, Namespace: namespace},
+					imageRegistryConfigMap,
+				),
+			).NotTo(Succeed())
 		})
 
-		It("fails to create the image registry configmap when the user configmap doesn't contain the registry config key", func() {
-			By("Creating the user created ConfigMap")
-			newRegistryCM := registryRefCM.DeepCopy()
-			delete(newRegistryCM.Data, registryConfKey)
-			Expect(k8sClient.Create(ctx, newRegistryCM)).To(Succeed())
+		It(
+			"fails to create the image registry configmap when the user configmap doesn't contain the registry config key",
+			func() {
+				By("Creating the user created ConfigMap")
+				newRegistryCM := registryRefCM.DeepCopy()
+				delete(newRegistryCM.Data, registryConfKey)
+				Expect(k8sClient.Create(ctx, newRegistryCM)).To(Succeed())
 
-			By("Calling the CreateConfig function")
-			configMapName, err := CreateConfig(ctx, k8sClient, &corev1.LocalObjectReference{Name: registryRefCM.Name}, namespace)
-			Expect(err).To(HaveOccurred())
-			Expect(configMapName).To(BeEmpty())
+				By("Calling the CreateConfig function")
+				configMapName, err := CreateConfig(
+					ctx,
+					k8sClient,
+					&corev1.LocalObjectReference{Name: registryRefCM.Name},
+					namespace,
+				)
+				Expect(err).To(HaveOccurred())
+				Expect(configMapName).To(BeEmpty())
 
-			By("Ensuring the ConfigMap wasn't created")
-			imageRegistryConfigMap := &corev1.ConfigMap{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: namespace}, imageRegistryConfigMap)).NotTo(Succeed())
-		})
+				By("Ensuring the ConfigMap wasn't created")
+				imageRegistryConfigMap := &corev1.ConfigMap{}
+				Expect(
+					k8sClient.Get(
+						ctx,
+						types.NamespacedName{Name: configMapName, Namespace: namespace},
+						imageRegistryConfigMap,
+					),
+				).NotTo(Succeed())
+			},
+		)
 	})
 })
 

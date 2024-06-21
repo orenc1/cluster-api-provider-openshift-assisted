@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -89,7 +90,11 @@ var _ = Describe("AgentControlPlane Controller", func() {
 				By("setting the cluster as the owner ref on the agent control plane")
 
 				agentControlPlane := getAgentControlPlane()
-				agentControlPlane.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))})
+				agentControlPlane.SetOwnerReferences(
+					[]metav1.OwnerReference{
+						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+					},
+				)
 				Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
 				By("checking if the agent control plane created the cluster deployment after reconcile")
@@ -121,9 +126,15 @@ var _ = Describe("AgentControlPlane Controller", func() {
 
 				agentControlPlane := getAgentControlPlane()
 				agentControlPlane.Spec.AgentConfigSpec.ClusterName = "my-cluster"
-				agentControlPlane.Spec.AgentConfigSpec.PullSecretRef = &corev1.LocalObjectReference{Name: "my-pullsecret"}
+				agentControlPlane.Spec.AgentConfigSpec.PullSecretRef = &corev1.LocalObjectReference{
+					Name: "my-pullsecret",
+				}
 				agentControlPlane.Spec.AgentConfigSpec.BaseDomain = "example.com"
-				agentControlPlane.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))})
+				agentControlPlane.SetOwnerReferences(
+					[]metav1.OwnerReference{
+						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+					},
+				)
 				Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
 				By("checking if the agent control plane created the cluster deployment after reconcile")
@@ -152,7 +163,11 @@ var _ = Describe("AgentControlPlane Controller", func() {
 			By("setting the owner ref on the agent control plane")
 
 			agentControlPlane := getAgentControlPlane()
-			agentControlPlane.SetOwnerReferences([]metav1.OwnerReference{*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind))})
+			agentControlPlane.SetOwnerReferences(
+				[]metav1.OwnerReference{
+					*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+				},
+			)
 			Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})

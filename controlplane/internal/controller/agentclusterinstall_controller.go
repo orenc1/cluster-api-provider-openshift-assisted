@@ -87,7 +87,11 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 	return ctrl.Result{}, nil
 }
 
-func (r *AgentClusterInstallReconciler) reconcile(ctx context.Context, aci *hiveext.AgentClusterInstall, acp *controlplanev1alpha1.AgentControlPlane) error {
+func (r *AgentClusterInstallReconciler) reconcile(
+	ctx context.Context,
+	aci *hiveext.AgentClusterInstall,
+	acp *controlplanev1alpha1.AgentControlPlane,
+) error {
 	if !hasKubeconfigRef(aci) {
 		return nil
 	}
@@ -119,7 +123,12 @@ func (r *AgentClusterInstallReconciler) reconcile(ctx context.Context, aci *hive
 	return nil
 }
 
-func (r *AgentClusterInstallReconciler) createKubeconfig(ctx context.Context, kubeconfigSecret *corev1.Secret, clusterName string, acp controlplanev1alpha1.AgentControlPlane) error {
+func (r *AgentClusterInstallReconciler) createKubeconfig(
+	ctx context.Context,
+	kubeconfigSecret *corev1.Secret,
+	clusterName string,
+	acp controlplanev1alpha1.AgentControlPlane,
+) error {
 	kubeconfig, ok := kubeconfigSecret.Data["kubeconfig"]
 	if !ok {
 		return errors.New("kubeconfig not found in secret")
@@ -141,7 +150,11 @@ func (r *AgentClusterInstallReconciler) createKubeconfig(ctx context.Context, ku
 	return nil
 }
 
-func (r *AgentClusterInstallReconciler) updateLabels(ctx context.Context, obj client.Object, labels map[string]string) error {
+func (r *AgentClusterInstallReconciler) updateLabels(
+	ctx context.Context,
+	obj client.Object,
+	labels map[string]string,
+) error {
 	objLabels := obj.GetLabels()
 	if len(objLabels) < 1 {
 		objLabels = make(map[string]string)
@@ -157,7 +170,11 @@ func (r *AgentClusterInstallReconciler) updateLabels(ctx context.Context, obj cl
 	return nil
 }
 
-func (r *AgentClusterInstallReconciler) getACIKubeconfig(ctx context.Context, aci *hiveext.AgentClusterInstall, agentCP controlplanev1alpha1.AgentControlPlane) (*corev1.Secret, error) {
+func (r *AgentClusterInstallReconciler) getACIKubeconfig(
+	ctx context.Context,
+	aci *hiveext.AgentClusterInstall,
+	agentCP controlplanev1alpha1.AgentControlPlane,
+) (*corev1.Secret, error) {
 	secretName := aci.Spec.ClusterMetadata.AdminKubeconfigSecretRef.Name
 
 	// Get the kubeconfig secret and label with capi key pair cluster.x-k8s.io/cluster-name=<cluster name>
@@ -176,7 +193,10 @@ func isInstalled(aci *hiveext.AgentClusterInstall) bool {
 	return aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts
 }
 
-func (r *AgentClusterInstallReconciler) ClusterKubeconfigSecretExists(ctx context.Context, clusterName, namespace string) bool {
+func (r *AgentClusterInstallReconciler) ClusterKubeconfigSecretExists(
+	ctx context.Context,
+	clusterName, namespace string,
+) bool {
 	secretName := fmt.Sprintf("%s-kubeconfig", clusterName)
 	kubeconfigSecret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: secretName, Namespace: namespace}, kubeconfigSecret); err != nil {

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
@@ -211,63 +212,77 @@ var _ = Describe("AgentBootstrapConfigSpec Controller", func() {
 				assertInfraEnvWithEmptyISOURL(ctx, k8sClient, abc)
 			})
 		})
-		When("InfraEnv, ClusterDeployment and AgentClusterInstall are already created but no Metal3Machine is running", func() {
-			It("should update metal3MachineTemplate", func() {
-				abc := setupControlPlaneAgentBootstrapConfig(ctx, k8sClient)
-				mockControlPlaneInitialization(ctx, k8sClient)
+		When(
+			"InfraEnv, ClusterDeployment and AgentClusterInstall are already created but no Metal3Machine is running",
+			func() {
+				It("should update metal3MachineTemplate", func() {
+					abc := setupControlPlaneAgentBootstrapConfig(ctx, k8sClient)
+					mockControlPlaneInitialization(ctx, k8sClient)
 
-				// InfraEnv and AgentBootstrapConfig is already updated by InfraEnv controller
-				Expect(k8sClient.Create(ctx, testutils.NewInfraEnv(namespace, infraEnvName))).To(Succeed())
-				expectedDiskFormat := "live-iso"
-				expectedISODownloadURL := "https://example.com/download-my-iso"
-				abc.Status.ISODownloadURL = expectedISODownloadURL
-				Expect(k8sClient.Status().Update(ctx, abc)).To(Succeed())
+					// InfraEnv and AgentBootstrapConfig is already updated by InfraEnv controller
+					Expect(k8sClient.Create(ctx, testutils.NewInfraEnv(namespace, infraEnvName))).To(Succeed())
+					expectedDiskFormat := "live-iso"
+					expectedISODownloadURL := "https://example.com/download-my-iso"
+					abc.Status.ISODownloadURL = expectedISODownloadURL
+					Expect(k8sClient.Status().Update(ctx, abc)).To(Succeed())
 
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: client.ObjectKeyFromObject(abc),
+					_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+						NamespacedName: client.ObjectKeyFromObject(abc),
+					})
+					Expect(err).NotTo(HaveOccurred())
+					assertISOURLOnM3Template(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+					assertBootstrapReady(abc)
 				})
-				Expect(err).NotTo(HaveOccurred())
-				assertISOURLOnM3Template(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
-				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
-				assertBootstrapReady(abc)
-			})
-		})
-		When("InfraEnv, ClusterDeployment and AgentClusterInstall are already created and Metal3Machine is running", func() {
-			It("should update metal3MachineTemplate", func() {
-				abc := setupControlPlaneAgentBootstrapConfigWithMetal3Machine(ctx, k8sClient)
-				mockControlPlaneInitialization(ctx, k8sClient)
-				// InfraEnv and AgentBootstrapConfig is already updated by InfraEnv controller
-				Expect(k8sClient.Create(ctx, testutils.NewInfraEnv(namespace, infraEnvName))).To(Succeed())
-				expectedDiskFormat := "live-iso"
-				expectedISODownloadURL := "https://example.com/download-my-iso"
-				// Simulate InfraEnv controller updating ISO to config
-				abc.Status.ISODownloadURL = expectedISODownloadURL
-				Expect(k8sClient.Status().Update(ctx, abc)).To(Succeed())
+			},
+		)
+		When(
+			"InfraEnv, ClusterDeployment and AgentClusterInstall are already created and Metal3Machine is running",
+			func() {
+				It("should update metal3MachineTemplate", func() {
+					abc := setupControlPlaneAgentBootstrapConfigWithMetal3Machine(ctx, k8sClient)
+					mockControlPlaneInitialization(ctx, k8sClient)
+					// InfraEnv and AgentBootstrapConfig is already updated by InfraEnv controller
+					Expect(k8sClient.Create(ctx, testutils.NewInfraEnv(namespace, infraEnvName))).To(Succeed())
+					expectedDiskFormat := "live-iso"
+					expectedISODownloadURL := "https://example.com/download-my-iso"
+					// Simulate InfraEnv controller updating ISO to config
+					abc.Status.ISODownloadURL = expectedISODownloadURL
+					Expect(k8sClient.Status().Update(ctx, abc)).To(Succeed())
 
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: client.ObjectKeyFromObject(abc),
+					_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+						NamespacedName: client.ObjectKeyFromObject(abc),
+					})
+					Expect(err).NotTo(HaveOccurred())
+
+					assertISOURLOnM3Template(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
+					assertISOURLOnM3Machine(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
+
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+					assertBootstrapReady(abc)
+
 				})
-				Expect(err).NotTo(HaveOccurred())
-
-				assertISOURLOnM3Template(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
-				assertISOURLOnM3Machine(ctx, k8sClient, expectedISODownloadURL, expectedDiskFormat)
-
-				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
-				assertBootstrapReady(abc)
-
-			})
-		})
+			},
+		)
 	})
 })
 
-func assertISOURLOnM3Template(ctx context.Context, k8sClient client.Client, expectedISODownloadURL, expectedDiskFormat string) {
+func assertISOURLOnM3Template(
+	ctx context.Context,
+	k8sClient client.Client,
+	expectedISODownloadURL, expectedDiskFormat string,
+) {
 	m3Template := testutils.NewM3MachineTemplate(namespace, metal3MachineTemplateName)
 	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(m3Template), m3Template)).To(Succeed())
 	Expect(m3Template.Spec.Template.Spec.Image.URL).To(Equal(expectedISODownloadURL))
 	Expect(m3Template.Spec.Template.Spec.Image.DiskFormat).To(Equal(&expectedDiskFormat))
 }
 
-func assertISOURLOnM3Machine(ctx context.Context, k8sClient client.Client, expectedISODownloadURL, expectedDiskFormat string) {
+func assertISOURLOnM3Machine(
+	ctx context.Context,
+	k8sClient client.Client,
+	expectedISODownloadURL, expectedDiskFormat string,
+) {
 	m3Machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(m3Machine), m3Machine)).To(Succeed())
 	Expect(m3Machine.Spec.Image.URL).To(Equal(expectedISODownloadURL))
@@ -279,9 +294,15 @@ func assertBootstrapReady(abc *bootstrapv1alpha1.AgentBootstrapConfig) {
 	Expect(*abc.Status.DataSecretName).NotTo(BeNil())
 }
 
-func assertInfraEnvWithEmptyISOURL(ctx context.Context, k8sClient client.Client, abc *bootstrapv1alpha1.AgentBootstrapConfig) {
+func assertInfraEnvWithEmptyISOURL(
+	ctx context.Context,
+	k8sClient client.Client,
+	abc *bootstrapv1alpha1.AgentBootstrapConfig,
+) {
 	infraEnvList := &v1beta1.InfraEnvList{}
-	Expect(k8sClient.List(ctx, infraEnvList, client.MatchingLabels{bootstrapv1alpha1.AgentBootstrapConfigLabel: abcName})).To(Succeed())
+	Expect(
+		k8sClient.List(ctx, infraEnvList, client.MatchingLabels{bootstrapv1alpha1.AgentBootstrapConfigLabel: abcName}),
+	).To(Succeed())
 	Expect(len(infraEnvList.Items)).To(Equal(1))
 	infraEnv := infraEnvList.Items[0]
 	Expect(abc.Status.InfraEnvRef).ToNot(BeNil())
@@ -315,7 +336,10 @@ func mockControlPlaneInitialization(ctx context.Context, k8sClient client.Client
 	crossReferenceACIAndCD(ctx, k8sClient, aci, cd)
 }
 
-func setupControlPlaneAgentBootstrapConfigWithMetal3Machine(ctx context.Context, k8sClient client.Client) *bootstrapv1alpha1.AgentBootstrapConfig {
+func setupControlPlaneAgentBootstrapConfigWithMetal3Machine(
+	ctx context.Context,
+	k8sClient client.Client,
+) *bootstrapv1alpha1.AgentBootstrapConfig {
 	abc := setupControlPlaneAgentBootstrapConfig(ctx, k8sClient)
 	m3Machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 	Expect(k8sClient.Create(ctx, m3Machine)).To(Succeed())
@@ -336,11 +360,19 @@ func setupControlPlaneAgentBootstrapConfigWithMetal3Machine(ctx context.Context,
 	return abc
 }
 
-func setupControlPlaneAgentBootstrapConfig(ctx context.Context, k8sClient client.Client) *bootstrapv1alpha1.AgentBootstrapConfig {
+func setupControlPlaneAgentBootstrapConfig(
+	ctx context.Context,
+	k8sClient client.Client,
+) *bootstrapv1alpha1.AgentBootstrapConfig {
 	cluster := testutils.NewCluster(clusterName, namespace)
 	Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 
-	m3Template := testutils.NewM3MachineTemplateWithImage(namespace, metal3MachineTemplateName, "https://example.com/abcd", "qcow2")
+	m3Template := testutils.NewM3MachineTemplateWithImage(
+		namespace,
+		metal3MachineTemplateName,
+		"https://example.com/abcd",
+		"qcow2",
+	)
 	Expect(k8sClient.Create(ctx, m3Template)).To(Succeed())
 	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(m3Template), m3Template)).To(Succeed())
 
@@ -385,7 +417,10 @@ func setupControlPlaneAgentBootstrapConfig(ctx context.Context, k8sClient client
 	return abc
 }
 
-func NewAgentBootstrapConfigWithOwner(namespace, name, clusterName string, owner client.Object) *bootstrapv1alpha1.AgentBootstrapConfig {
+func NewAgentBootstrapConfigWithOwner(
+	namespace, name, clusterName string,
+	owner client.Object,
+) *bootstrapv1alpha1.AgentBootstrapConfig {
 	ownerGVK := owner.GetObjectKind().GroupVersionKind()
 	ownerRefs := []metav1.OwnerReference{
 		{
@@ -413,7 +448,12 @@ func NewAgentBootstrapConfig(namespace, name, clusterName string) *bootstrapv1al
 	}
 }
 
-func crossReferenceACIAndCD(ctx context.Context, k8sClient client.Client, aci *v1beta12.AgentClusterInstall, cd *v1.ClusterDeployment) {
+func crossReferenceACIAndCD(
+	ctx context.Context,
+	k8sClient client.Client,
+	aci *v1beta12.AgentClusterInstall,
+	cd *v1.ClusterDeployment,
+) {
 	cd.Spec.ClusterInstallRef = &v1.ClusterInstallLocalReference{
 		Group:   aci.GroupVersionKind().Group,
 		Version: aci.GroupVersionKind().Version,

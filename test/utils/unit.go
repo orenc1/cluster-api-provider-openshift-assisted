@@ -72,7 +72,11 @@ func NewCluster(clusterName, namespace string) *clusterv1.Cluster {
 	return cluster
 }
 
-func NewMachineWithInfraRef(machineName, namespace, clusterName string, acp *controlplanev1alpha1.AgentControlPlane, infraRef client.Object) *clusterv1.Machine {
+func NewMachineWithInfraRef(
+	machineName, namespace, clusterName string,
+	acp *controlplanev1alpha1.AgentControlPlane,
+	infraRef client.Object,
+) *clusterv1.Machine {
 	infraRefGVK := infraRef.GetObjectKind().GroupVersionKind()
 	machine := NewMachineWithOwner(namespace, machineName, clusterName, acp)
 	machine.Spec.InfrastructureRef = corev1.ObjectReference{
@@ -146,7 +150,10 @@ func NewAgentControlPlane(namespace, name string) *controlplanev1alpha1.AgentCon
 	}
 }
 
-func NewAgentControlPlaneWithMachineTemplate(namespace, name string, m3Template *metal3.Metal3MachineTemplate) *controlplanev1alpha1.AgentControlPlane {
+func NewAgentControlPlaneWithMachineTemplate(
+	namespace, name string,
+	m3Template *metal3.Metal3MachineTemplate,
+) *controlplanev1alpha1.AgentControlPlane {
 	acp := NewAgentControlPlane(namespace, name)
 	acp.Spec.MachineTemplate.InfrastructureRef = corev1.ObjectReference{
 		Kind:       m3Template.Kind,

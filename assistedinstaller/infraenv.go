@@ -9,7 +9,11 @@ import (
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 )
 
-func GetInfraEnvFromConfig(infraEnvName string, config *bootstrapv1alpha1.AgentBootstrapConfig, clusterDeployment *hivev1.ClusterDeployment) *aiv1beta1.InfraEnv {
+func GetInfraEnvFromConfig(
+	infraEnvName string,
+	config *bootstrapv1alpha1.AgentBootstrapConfig,
+	clusterDeployment *hivev1.ClusterDeployment,
+) *aiv1beta1.InfraEnv {
 	infraEnv := &aiv1beta1.InfraEnv{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      infraEnvName,

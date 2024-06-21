@@ -19,9 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
+
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	"k8s.io/client-go/tools/reference"
-	"time"
 
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	"github.com/openshift/assisted-service/api/hiveextension/v1beta1"
@@ -138,7 +139,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	log.V(logutil.TraceLevel).Info("config owner found", "name", configOwner.GetName())
 
 	if !config.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, config, configOwner)
+		return ctrl.Result{}, r.handleDeletion(ctx, config, configOwner)
 	}
 
 	if !controllerutil.ContainsFinalizer(config, agentBootstrapConfigFinalizer) {
@@ -148,7 +149,8 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	cluster, err := capiutil.GetClusterByName(ctx, r.Client, configOwner.GetNamespace(), configOwner.ClusterName())
 	if err != nil {
 		if errors.Cause(err) == capiutil.ErrNoCluster {
-			log.V(logutil.TraceLevel).Info(fmt.Sprintf("%s does not belong to a cluster yet, waiting until it's part of a cluster", configOwner.GetKind()))
+			log.V(logutil.TraceLevel).
+				Info(fmt.Sprintf("%s does not belong to a cluster yet, waiting until it's part of a cluster", configOwner.GetKind()))
 			return ctrl.Result{}, nil
 		}
 
@@ -162,7 +164,13 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 
 	if !cluster.Status.InfrastructureReady {
 		log.V(logutil.TraceLevel).Info("Cluster infrastructure is not read, waiting")
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.WaitingForClusterInfrastructureReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForClusterInfrastructureReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
 
 		return ctrl.Result{}, nil
 	}
@@ -176,42 +184,85 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	clusterDeployment, err := r.getClusterDeployment(ctx, cluster.GetName())
 	if err != nil {
 		log.V(logutil.InfoLevel).Info("could not retrieve ClusterDeployment... requeuing", "cluster", cluster.GetName())
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.WaitingForAssistedInstallerReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	aci, err := r.getAgentClusterInstall(ctx, clusterDeployment)
 	if err != nil {
 		log.V(logutil.InfoLevel).Info("could not retrieve AgentClusterInstall... requeuing")
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.WaitingForAssistedInstallerReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
 		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// if added worker after start install, will be treated as day2
-	if !capiutil.IsControlPlaneMachine(machine) && !(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
+	if !capiutil.IsControlPlaneMachine(machine) &&
+		!(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
 		log.V(logutil.DebugLevel).Info("not controlplane machine and installation already started, requeuing")
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.WaitingForInstallCompleteReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForInstallCompleteReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
 		return ctrl.Result{Requeue: true, RequeueAfter: 60 * time.Second}, nil
 	}
 
 	if err := r.ensureInfraEnv(ctx, config, clusterDeployment); err != nil {
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.InfraEnvFailedReason, clusterv1.ConditionSeverityWarning, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.InfraEnvFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"",
+		)
 		return ctrl.Result{}, err
 	}
 
 	if config.Status.ISODownloadURL == "" {
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.WaitingForLiveISOURLReason, clusterv1.ConditionSeverityInfo, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForLiveISOURLReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
 		return ctrl.Result{}, nil
 	}
 
 	if err := r.setMetal3MachineTemplateImage(ctx, config, machine); err != nil {
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.PropagatingLiveISOURLFailedReason, clusterv1.ConditionSeverityWarning, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"",
+		)
 		return ctrl.Result{}, err
 	}
 
 	// if a metal3 machine booted before the template was updated, then we need to update it
 	if err := r.setMetal3MachineImage(ctx, config, machine); err != nil {
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.PropagatingLiveISOURLFailedReason, clusterv1.ConditionSeverityWarning, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.PropagatingLiveISOURLFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"",
+		)
 		return ctrl.Result{}, err
 	}
 
@@ -219,7 +270,13 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 	secret, err := r.createUserDataSecret(ctx, config)
 	if err != nil {
 		log.Error(err, "couldn't create user data secret", "name", config.Name)
-		conditions.MarkFalse(config, bootstrapv1alpha1.DataSecretAvailableCondition, bootstrapv1alpha1.CreatingSecretFailedReason, clusterv1.ConditionSeverityWarning, "")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.CreatingSecretFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"",
+		)
 		return ctrl.Result{}, err
 	}
 
@@ -230,10 +287,21 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 }
 
 // Ensures InfraEnv exists
-func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, clusterDeployment *hivev1.ClusterDeployment) error {
+func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(
+	ctx context.Context,
+	config *bootstrapv1alpha1.AgentBootstrapConfig,
+	clusterDeployment *hivev1.ClusterDeployment,
+) error {
 	log := ctrl.LoggerFrom(ctx)
 	infraEnvName, err := getInfraEnvName(config)
-	log.WithValues("AgentBootstrapConfig Name", config.Name, "AgentBootstrapConfig Namespace", config.Namespace, "InfraEnv Name", infraEnvName)
+	log.WithValues(
+		"AgentBootstrapConfig Name",
+		config.Name,
+		"AgentBootstrapConfig Namespace",
+		config.Namespace,
+		"InfraEnv Name",
+		infraEnvName,
+	)
 
 	if err != nil {
 		log.Error(err, "couldn't get infraenv name for agentbootstrapconfig")
@@ -265,7 +333,10 @@ func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(ctx context.Context, con
 }
 
 // Retrieve AgentClusterInstall by ClusterDeployment.Spec.ClusterInstallRef
-func (r *AgentBootstrapConfigReconciler) getAgentClusterInstall(ctx context.Context, clusterDeployment *hivev1.ClusterDeployment) (*v1beta1.AgentClusterInstall, error) {
+func (r *AgentBootstrapConfigReconciler) getAgentClusterInstall(
+	ctx context.Context,
+	clusterDeployment *hivev1.ClusterDeployment,
+) (*v1beta1.AgentClusterInstall, error) {
 	if clusterDeployment.Spec.ClusterInstallRef == nil {
 		return nil, fmt.Errorf("cluster deployment does not reference ACI")
 	}
@@ -281,7 +352,10 @@ func (r *AgentBootstrapConfigReconciler) getAgentClusterInstall(ctx context.Cont
 }
 
 // Retrieve ClusterDeployment by cluster name label
-func (r *AgentBootstrapConfigReconciler) getClusterDeployment(ctx context.Context, clusterName string) (*hivev1.ClusterDeployment, error) {
+func (r *AgentBootstrapConfigReconciler) getClusterDeployment(
+	ctx context.Context,
+	clusterName string,
+) (*hivev1.ClusterDeployment, error) {
 	clusterDeployments := hivev1.ClusterDeploymentList{}
 	if err := r.Client.List(ctx, &clusterDeployments, client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName}); err != nil {
 		return nil, err
@@ -295,7 +369,10 @@ func (r *AgentBootstrapConfigReconciler) getClusterDeployment(ctx context.Contex
 }
 
 // Creates UserData secret
-func (r *AgentBootstrapConfigReconciler) createUserDataSecret(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig) (*corev1.Secret, error) {
+func (r *AgentBootstrapConfigReconciler) createUserDataSecret(
+	ctx context.Context,
+	config *bootstrapv1alpha1.AgentBootstrapConfig,
+) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Namespace: config.Namespace, Name: config.Name}, secret); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -315,10 +392,26 @@ func (r *AgentBootstrapConfigReconciler) createUserDataSecret(ctx context.Contex
 }
 
 // Overrides image reference by setting the LiveISO present on the AgentBootstrapConfig.Status.ISODownloadURL
-func (r *AgentBootstrapConfigReconciler) setMetal3MachineImage(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, machine *clusterv1.Machine) error {
+func (r *AgentBootstrapConfigReconciler) setMetal3MachineImage(
+	ctx context.Context,
+	config *bootstrapv1alpha1.AgentBootstrapConfig,
+	machine *clusterv1.Machine,
+) error {
 	log := ctrl.LoggerFrom(ctx)
-	m3MachineKey := types.NamespacedName{Name: machine.Spec.InfrastructureRef.Name, Namespace: machine.Spec.InfrastructureRef.Namespace}
-	log.WithValues("AgentBootstrapConfig Name", config.Name, "AgentBootstrapConfig Namespace", config.Namespace, "Metal3Machine Name", m3MachineKey.Name, "Metal3Machine Namespace", m3MachineKey.Namespace)
+	m3MachineKey := types.NamespacedName{
+		Name:      machine.Spec.InfrastructureRef.Name,
+		Namespace: machine.Spec.InfrastructureRef.Namespace,
+	}
+	log.WithValues(
+		"AgentBootstrapConfig Name",
+		config.Name,
+		"AgentBootstrapConfig Namespace",
+		config.Namespace,
+		"Metal3Machine Name",
+		m3MachineKey.Name,
+		"Metal3Machine Namespace",
+		m3MachineKey.Namespace,
+	)
 
 	metal3Machine := &metal3.Metal3Machine{}
 	if err := r.Client.Get(ctx, m3MachineKey, metal3Machine); err != nil {
@@ -341,13 +434,17 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineImage(ctx context.Conte
 			log.Error(err, "couldn't update metal3 machine")
 			return err
 		}
-		log.V(logutil.TraceLevel).Info("Added ISO URLs to metal3 machines", "machine", metal3Machine.Name, "namespace", metal3Machine.Namespace)
+		log.V(logutil.TraceLevel).
+			Info("Added ISO URLs to metal3 machines", "machine", metal3Machine.Name, "namespace", metal3Machine.Namespace)
 	}
 	return nil
 }
 
 // Retrieves InfrastructureRefKey
-func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(ctx context.Context, machine *clusterv1.Machine) (types.NamespacedName, error) {
+func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(
+	ctx context.Context,
+	machine *clusterv1.Machine,
+) (types.NamespacedName, error) {
 	acp := controlplanev1alpha1.AgentControlPlane{}
 	err := util.GetTypedOwner(ctx, r.Client, machine, &acp)
 	if err != nil {
@@ -368,7 +465,11 @@ func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(ctx context.Con
 }
 
 // Overrides image reference by setting the LiveISO present on the AgentBootstrapConfig.Status.ISODownloadURL
-func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, machine *clusterv1.Machine) error {
+func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(
+	ctx context.Context,
+	config *bootstrapv1alpha1.AgentBootstrapConfig,
+	machine *clusterv1.Machine,
+) error {
 	log := ctrl.LoggerFrom(ctx)
 	tplKey, err := r.getInfrastructureRefKey(ctx, machine)
 	log.WithValues("Metal3MachineTemplate Name", tplKey.Name, "Metal3MachineTemplate Namespace", tplKey.Namespace)
@@ -383,7 +484,8 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(ctx conte
 		return err
 	}
 
-	if machineTpl.Spec.Template.Spec.Image.URL != config.Status.ISODownloadURL || machineTpl.Spec.Template.Spec.Image.DiskFormat != &liveIsoFormat {
+	if machineTpl.Spec.Template.Spec.Image.URL != config.Status.ISODownloadURL ||
+		machineTpl.Spec.Template.Spec.Image.DiskFormat != &liveIsoFormat {
 		machineTpl.Spec.Template.Spec.Image.URL = config.Status.ISODownloadURL
 		machineTpl.Spec.Template.Spec.Image.DiskFormat = &liveIsoFormat
 		if err := r.Client.Update(ctx, machineTpl); err != nil {
@@ -395,29 +497,31 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineTemplateImage(ctx conte
 }
 
 // Deletes child resources (Agent) and removes finalizer
-func (r *AgentBootstrapConfigReconciler) handleDeletion(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, owner *bsutil.ConfigOwner) (ctrl.Result, error) {
+func (r *AgentBootstrapConfigReconciler) handleDeletion(ctx context.Context, config *bootstrapv1alpha1.AgentBootstrapConfig, owner *bsutil.ConfigOwner) error {
 	log := ctrl.LoggerFrom(ctx)
 	log.WithValues("name", config.Name, "namespace", config.Namespace)
 	if controllerutil.ContainsFinalizer(config, agentBootstrapConfigFinalizer) {
 		// Check if it's a control plane node and if that cluster is being deleted
-		if _, isControlPlane := config.Labels[clusterv1.MachineControlPlaneLabel]; isControlPlane && owner.GetDeletionTimestamp().IsZero() {
+		if _, isControlPlane := config.Labels[clusterv1.MachineControlPlaneLabel]; isControlPlane &&
+			owner.GetDeletionTimestamp().IsZero() {
 			// Don't remove finalizer if the controlplane is not being deleted
 			err := fmt.Errorf("agent bootstrap config belongs to control plane that's not being deleted")
 			log.Error(err, "unable to delete agent bootstrap config")
-			return ctrl.Result{}, err
+			return err
 		}
 
 		// Delete associated agent
 		if config.Status.AgentRef != nil {
-			if err := r.Client.Delete(ctx, &aiv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: config.Status.AgentRef.Name, Namespace: config.Namespace}}); err != nil && !apierrors.IsNotFound(err) {
+			if err := r.Client.Delete(ctx, &aiv1beta1.Agent{ObjectMeta: metav1.ObjectMeta{Name: config.Status.AgentRef.Name, Namespace: config.Namespace}}); err != nil &&
+				!apierrors.IsNotFound(err) {
 				log.Error(err, "failed to delete agent associated with this agent bootstrap config")
-				return ctrl.Result{}, err
+				return err
 			}
 			config.Status.AgentRef = nil
 		}
 		controllerutil.RemoveFinalizer(config, agentBootstrapConfigFinalizer)
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // Generate InfraEnvName
@@ -466,7 +570,10 @@ func (r *AgentBootstrapConfigReconciler) FilterMachine(_ context.Context, o clie
 	}
 	// m.Spec.ClusterName
 
-	if m.Spec.Bootstrap.ConfigRef != nil && m.Spec.Bootstrap.ConfigRef.GroupVersionKind() == bootstrapv1alpha1.GroupVersion.WithKind("AgentBootstrapConfigSpec") {
+	if m.Spec.Bootstrap.ConfigRef != nil &&
+		m.Spec.Bootstrap.ConfigRef.GroupVersionKind() == bootstrapv1alpha1.GroupVersion.WithKind(
+			"AgentBootstrapConfigSpec",
+		) {
 		name := client.ObjectKey{Namespace: m.Namespace, Name: m.Spec.Bootstrap.ConfigRef.Name}
 		result = append(result, ctrl.Request{NamespacedName: name})
 	}
