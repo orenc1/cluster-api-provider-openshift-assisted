@@ -97,8 +97,11 @@ run: manifests generate fmt vet ## Run a controller from your host.
 
 .PHONY: provider-docker-build
 provider-docker-build:
-	$(MAKE) docker-build IMG=quay.io/$(CONTAINER_REPOSITORY_ORG)/openshift-capi-agent-$(PROVIDER):$(CONTAINER_TAG)
-	$(MAKE) docker-push IMG=quay.io/$(CONTAINER_REPOSITORY_ORG)/openshift-capi-agent-$(PROVIDER):$(CONTAINER_TAG)
+	$(MAKE) docker-build-internal IMG=quay.io/$(CONTAINER_REPOSITORY_ORG)/openshift-capi-agent-$(PROVIDER):$(CONTAINER_TAG)
+
+.PHONY: provider-docker-push
+provider-docker-push:
+	$(MAKE) docker-push-internal IMG=quay.io/$(CONTAINER_REPOSITORY_ORG)/openshift-capi-agent-$(PROVIDER):$(CONTAINER_TAG)
 
 .PHONY: bootstrap-docker-build
 bootstrap-docker-build:
@@ -108,19 +111,32 @@ bootstrap-docker-build:
 controlplane-docker-build:
 	$(MAKE) provider-docker-build PROVIDER=controlplane
 
+.PHONY: bootstrap-docker-push
+bootstrap-docker-push:
+	$(MAKE) provider-docker-push PROVIDER=bootstrap
+
+.PHONY: controlplane-docker-push
+controlplane-docker-push:
+	$(MAKE) provider-docker-push PROVIDER=controlplane
 
 .PHONY: docker-build-all
 docker-build-all: bootstrap-docker-build controlplane-docker-build
+
+.PHONY: docker-push-all
+docker-push-all: bootstrap-docker-push controlplane-docker-push
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
+docker-build: bootstrap-docker-build controlplane-docker-build
+
+.PHONY: docker-build-internal
+docker-build-internal: ## Build docker image with the manager.
 	$(CONTAINER_TOOL) build --build-arg PROVIDER=$(PROVIDER) -t ${IMG} .
 
-.PHONY: docker-push
-docker-push: ## Push docker image with the manager.
+.PHONY: docker-push-internal
+docker-push-internal: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
