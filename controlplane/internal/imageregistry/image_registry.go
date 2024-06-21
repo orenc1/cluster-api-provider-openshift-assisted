@@ -1,18 +1,13 @@
 package imageregistry
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/pelletier/go-toml"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -28,35 +23,12 @@ const (
 	imageConfigKey                 = "image-config.json"
 )
 
-// CreateConfig creates a ConfigMap containing the manifests to be created on the spoke cluster.
-// The manifests that are in the ConfigMap include an ImageDigestMirrorSet CR and/or an ImageTagMirrorSet CR with the mirror registry information,
-// a ConfigMap containing the additional trusted certificates for the mirror registry, and an image.config.openshift.io
-// CR that references the ConfigMap with the additional trusted certificate.
-// Successful creation of the ConfigMap will return the name of the created ConfigMap to be added as a manifest reference
-func CreateConfig(
-	ctx context.Context,
-	client client.Client,
-	registryRef *corev1.LocalObjectReference,
-	namespace string,
-) (string, error) {
-	imageRegistryConfigMap := &corev1.ConfigMap{}
-	if err := client.Get(ctx, types.NamespacedName{Name: registryRef.Name, Namespace: namespace}, imageRegistryConfigMap); err != nil {
-		return "", err
-	}
-
-	additionalRegistryConfigMap, err := createImageRegistryConfig(imageRegistryConfigMap, namespace)
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := ctrl.CreateOrUpdate(ctx, client, additionalRegistryConfigMap, func() error { return nil }); err != nil &&
-		!apierrors.IsAlreadyExists(err) {
-		return "", err
-	}
-	return additionalRegistryConfigMap.Name, nil
-}
-
-func createImageRegistryConfig(imageRegistry *corev1.ConfigMap, namespace string) (*corev1.ConfigMap, error) {
+// CreateImageRegistryConfigmap creates a ConfigMap containing the manifests for mirror registry configuration
+// to be created on the spoke cluster. The manifests that are in the ConfigMap include an ImageDigestMirrorSet CR
+// and/or an ImageTagMirrorSet CR with the mirror registry information, a ConfigMap containing the additional
+// trusted certificates for the mirror registry, and an image.config.openshift.io CR that references the
+// ConfigMap with the additional trusted certificate.
+func CreateImageRegistryConfigmap(imageRegistry *corev1.ConfigMap, namespace string) (*corev1.ConfigMap, error) {
 	data := make(map[string]string, 0)
 
 	registryConf, ok := imageRegistry.Data[registryConfKey]

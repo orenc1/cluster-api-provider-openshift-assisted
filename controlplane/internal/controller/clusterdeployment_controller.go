@@ -276,18 +276,21 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	}
 
 	if acp.Spec.AgentConfigSpec.ImageRegistryRef != nil {
-		imageRegistryManifest, err := imageregistry.CreateConfig(
-			ctx,
-			r.Client,
-			acp.Spec.AgentConfigSpec.ImageRegistryRef,
-			clusterDeployment.Namespace,
-		)
+		registryConfigmap := &corev1.ConfigMap{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: acp.Spec.AgentConfigSpec.ImageRegistryRef.Name, Namespace: acp.Namespace}, registryConfigmap); err != nil {
+			return nil, err
+		}
+
+		spokeImageRegistryConfigmap, err := imageregistry.CreateImageRegistryConfigmap(registryConfigmap, acp.Namespace)
 		if err != nil {
+			return nil, err
+		}
+
+		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
 			log.Error(err, "failed to create image registry config manifest")
 			return nil, err
-		} else {
-			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageRegistryManifest})
 		}
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: spokeImageRegistryConfigmap.Name})
 	}
 
 	aci := &hiveext.AgentClusterInstall{
