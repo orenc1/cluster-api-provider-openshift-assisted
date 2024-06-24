@@ -2,15 +2,16 @@ package util
 
 import (
 	"context"
-
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
-	"sigs.k8s.io/cluster-api/util/labels/format"
-
 	"fmt"
 
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
+	"sigs.k8s.io/cluster-api/util/labels/format"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -58,4 +59,23 @@ func ControlPlaneMachineLabelsForCluster(
 	// longer than 63 characters.
 	labels[clusterv1.MachineControlPlaneNameLabel] = format.MustFormatValue(acp.Name)
 	return labels
+}
+
+// Assisted-service expects the pull secret to
+// 1. Have .dockerconfigjson as a key
+// 2. Have the value of .dockerconfigjson be a base64-encoded JSON
+// 3. The JSON must have the key "auths" followed by repository with an "auth" key
+func GenerateFakePullSecret(name, namespace string) *corev1.Secret {
+	// placeholder:secret base64 encoded is cGxhY2Vob2xkZXI6c2VjcmV0Cg==
+	fakePullSecret := "{\"auths\":{\"fake-pull-secret\":{\"auth\":\"cGxhY2Vob2xkZXI6c2VjcmV0Cg==\"}}}"
+
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			".dockerconfigjson": []byte(fakePullSecret),
+		},
+	}
 }
