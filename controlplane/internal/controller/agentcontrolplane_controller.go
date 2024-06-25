@@ -24,6 +24,7 @@ import (
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
@@ -428,7 +429,7 @@ func (r *AgentControlPlaneReconciler) ensurePullSecret(
 		return nil
 	}
 
-	secret := util.GenerateFakePullSecret(placeholderPullSecretName, acp.Namespace)
+	secret := auth.GenerateFakePullSecret(placeholderPullSecretName, acp.Namespace)
 	if err := controllerutil.SetOwnerReference(acp, secret, r.Scheme); err != nil {
 		return err
 	}
