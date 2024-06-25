@@ -36,6 +36,7 @@ import (
 	capiutil "sigs.k8s.io/cluster-api/util"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
@@ -285,6 +286,8 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 		if err != nil {
 			return nil, err
 		}
+
+		_ = controllerutil.SetOwnerReference(&acp, spokeImageRegistryConfigmap, r.Scheme)
 
 		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
 			log.Error(err, "failed to create image registry config manifest")
