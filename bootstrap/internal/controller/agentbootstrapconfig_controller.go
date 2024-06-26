@@ -315,6 +315,7 @@ func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(
 	}
 
 	infraEnv := assistedinstaller.GetInfraEnvFromConfig(infraEnvName, config, clusterDeployment)
+	_ = controllerutil.SetOwnerReference(config, infraEnv, r.Scheme)
 	err = r.Create(ctx, infraEnv)
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return err

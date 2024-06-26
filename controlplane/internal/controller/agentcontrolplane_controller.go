@@ -274,7 +274,8 @@ func (r *AgentControlPlaneReconciler) ensureClusterDeployment(
 ) error {
 	if acp.Status.ClusterDeploymentRef == nil {
 		clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, clusterName)
-		if err := r.Create(ctx, clusterDeployment); err != nil && !apierrors.IsAlreadyExists(err) {
+		_ = controllerutil.SetOwnerReference(acp, clusterDeployment, r.Scheme)
+		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, clusterDeployment, func() error { return nil }); err != nil {
 			return err
 		}
 		ref, err := reference.GetReference(r.Scheme, clusterDeployment)
@@ -329,6 +330,7 @@ func (r *AgentControlPlaneReconciler) scaleUpControlPlane(ctx context.Context, a
 		return err
 	}
 	bootstrapConfig := r.generateAgentBootstrapConfig(acp, clusterName, name)
+	_ = controllerutil.SetOwnerReference(acp, bootstrapConfig, r.Scheme)
 	if err := r.Client.Create(ctx, bootstrapConfig); err != nil {
 		conditions.MarkFalse(acp, controlplanev1alpha1.MachinesCreatedCondition, controlplanev1alpha1.BootstrapTemplateCloningFailedReason,
 			clusterv1.ConditionSeverityError, err.Error())
