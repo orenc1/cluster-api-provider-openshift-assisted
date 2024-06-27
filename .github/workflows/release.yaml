@@ -39,7 +39,7 @@ jobs:
         with:
           push: true
           context: ${{ env.context }}
-          tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:${{env.VERSION}}, ${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:latest"
+          tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:${{env.VERSION}}, ${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:latest"
           build-args: "PROVIDER=bootstrap"
       - name: Build and publish controplane image to Quay
         uses: docker/build-push-action@v5
