@@ -32,7 +32,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          path: ${{ env.context }}
+          context: ${{ env.context }}
           registry: ${{ secrets.REGISTRY_SERVER }}
           repository: ${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}
           username: ${{ secrets.REGISTRY_USERNAME }}
@@ -42,7 +42,8 @@ jobs:
       - name: Build and publish bootstrap image to Quay
         uses: docker/build-push-action@v1
         with:
-          path: ${{ env.context }}
+          push: true
+          context: ${{ env.context }}
           registry: ${{ secrets.REGISTRY_SERVER }}
           repository: ${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
