@@ -159,6 +159,46 @@ var _ = Describe("AgentControlPlane Controller", func() {
 				Expect(cd.Spec.PullSecretRef).To(Equal(agentControlPlane.Spec.AgentConfigSpec.PullSecretRef))
 			})
 		})
+
+		When("a pull secret isn't set on the AgentControlPlane", func() {
+			It("should successfully create the ClusterDeployment with the default fake pull secret", func() {
+				By("setting the cluster as the owner ref on the agent control plane")
+				agentControlPlane := getAgentControlPlane()
+				agentControlPlane.SetOwnerReferences(
+					[]metav1.OwnerReference{
+						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+					},
+				)
+				Expect(k8sClient.Create(ctx, agentControlPlane)).To(Succeed())
+
+				By("checking if the agent control plane created the cluster deployment after reconcile")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				err = k8sClient.Get(ctx, typeNamespacedName, agentControlPlane)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(agentControlPlane.Status.ClusterDeploymentRef).NotTo(BeNil())
+				Expect(agentControlPlane.Status.ClusterDeploymentRef.Name).Should(Equal(agentControlPlane.Name))
+
+				By("checking that the fake pull secret was created")
+				pullSecret := &corev1.Secret{}
+				err = k8sClient.Get(ctx, types.NamespacedName{Name: placeholderPullSecretName, Namespace: namespace}, pullSecret)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(pullSecret).NotTo(BeNil())
+				Expect(pullSecret.Data).NotTo(BeNil())
+				Expect(pullSecret.Data).To(HaveKey(".dockerconfigjson"))
+
+				By("checking that the cluster deployment was created and references the fake pull secret")
+				cd := &hivev1.ClusterDeployment{}
+				err = k8sClient.Get(ctx, typeNamespacedName, cd)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cd).NotTo(BeNil())
+				Expect(cd.Spec.PullSecretRef).NotTo(BeNil())
+				Expect(cd.Spec.PullSecretRef.Name).To(Equal(placeholderPullSecretName))
+
+			})
+		})
 		It("should add a finalizer to the agent control plane if it's not being deleted", func() {
 			By("setting the owner ref on the agent control plane")
 
