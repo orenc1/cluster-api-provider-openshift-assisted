@@ -102,15 +102,19 @@ var _ = Describe("InfraEnv Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
-		When("Infraenv ISO URL set, but no ABC ", func() {
+		When("Infraenv ISO URL set, but no AgentBootstrapConfigs reference it", func() {
 			It("should reconcile with no errors", func() {
+				By("creating the InfraEnv and AgentBootstrapConfig")
 				infraEnv := testutils.NewInfraEnv(namespace, infraEnvName)
 				infraEnv.Labels = map[string]string{
 					clusterv1.ClusterNameLabel: clusterName,
 				}
 				infraEnv.Status.ISODownloadURL = "https://example.com/my-image"
 				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
+				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
+				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
 
+				By("reconciling the InfraEnv")
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: types.NamespacedName{
 						Name:      infraEnvName,
@@ -118,6 +122,10 @@ var _ = Describe("InfraEnv Controller", func() {
 					},
 				})
 				Expect(err).NotTo(HaveOccurred())
+
+				By("checking that the AgentBootstrapConfig does not have its ISO URL set")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+				Expect(abc.Status.ISODownloadURL).To(BeEmpty())
 			})
 		})
 		When("Infraenv ISO URL set, and there is a referenced ABC ", func() {
@@ -142,6 +150,7 @@ var _ = Describe("InfraEnv Controller", func() {
 				})
 				Expect(err).NotTo(HaveOccurred())
 
+				By("checking that the AgentBootstrapConfig does have its ISO URL set")
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
 				Expect(abc.Status.ISODownloadURL).To(Equal(infraEnv.Status.ISODownloadURL))
 			})
