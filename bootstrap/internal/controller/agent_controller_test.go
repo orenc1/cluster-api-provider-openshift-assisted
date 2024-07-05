@@ -18,9 +18,7 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"strings"
-	"time"
 
 	"github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	"github.com/metal3-io/cluster-api-provider-metal3/baremetal"
@@ -42,12 +40,13 @@ import (
 
 const agentInterfaceMACAddress = "00-B0-D0-63-C2-26"
 
-var _ = Describe("InfraEnv Controller", func() {
+var _ = Describe("Agent Controller", func() {
 	Context("When reconciling a resource", func() {
 		ctx := context.Background()
-		var controllerReconciler *AgentReconciler
-		var k8sClient client.Client
-
+		var (
+			controllerReconciler *AgentReconciler
+			k8sClient            client.Client
+		)
 		BeforeEach(func() {
 			k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
 				WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
@@ -82,131 +81,70 @@ var _ = Describe("InfraEnv Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
-		When("an Agent resource exist, but with no ClusterDeployment reference", func() {
-			It("should reconcile with no errors", func() {
-
+		When("an Agent resource exist, but with no interfaces", func() {
+			It("should reconcile with an error", func() {
 				agent := testutils.NewAgent(namespace, agentName)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(agent),
 				})
-				Expect(err).NotTo(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(Equal("agent doesn't have inventory yet"))
 			})
 		})
-		When("an Agent resource with a ClusterDeployment reference that points to nowhere", func() {
+		When("an Agent resource exists with a machine has no ABC reference", func() {
 			It("should reconcile with no errors", func() {
-
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				// do not create ClusterDeployment
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
+				By("Creating the BMH, Metal3Machine, and Machine")
+				bmh := testutils.NewBareMetalHost(namespace, bmhName)
+				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
+				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
+				m3machine.Annotations = map[string]string{
+					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
+				}
+				machine := testutils.NewMachine(namespace, machineName, clusterName)
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
+
+				By("Reconciling the Agent")
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(agent),
 				})
 				Expect(err).NotTo(HaveOccurred())
 			})
 		})
-		When(
-			"an Agent resource with a valid ClusterDeployment reference, but not belonging to any CAPI cluster",
-			func() {
-				It("should reconcile with errors", func() {
-					cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-					Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-					agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-					Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-
-					_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-						NamespacedName: client.ObjectKeyFromObject(agent),
-					})
-					Expect(err).To(HaveOccurred())
-					Expect(
-						err.Error(),
-					).To(Equal("clusterdeployment test-clusterdeployment does not belong to a CAPI cluster"))
-				})
-			},
-		)
-		When(
-			"an Agent resource with a valid CAPI-controlled ClusterDeployment reference but machine has no ABC reference",
-			func() {
-				It("should return error", func() {
-					cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-					cd.Labels = map[string]string{
-						clusterv1.ClusterNameLabel: clusterName,
-					}
-					Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-					agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-					agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-						{
-							Name:       "dummy",
-							MacAddress: agentInterfaceMACAddress,
-						},
-					}
-
-					Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-					bmh := testutils.NewBareMetalHost(namespace, bmhName)
-					bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-					Expect(k8sClient.Create(ctx, bmh))
-
-					m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
-					m3machine.Annotations = map[string]string{
-						baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
-					}
-
-					machine := testutils.NewMachine(namespace, machineName, clusterName)
-					Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
-					Expect(k8sClient.Create(ctx, m3machine))
-					Expect(k8sClient.Create(ctx, machine))
-
-					_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-						NamespacedName: client.ObjectKeyFromObject(agent),
-					})
-					Expect(err).To(HaveOccurred())
-					Expect(
-						err.Error(),
-					).To(Equal("machine test-namespace/test-resource does not have any bootstrap config ref"))
-				})
-			},
-		)
-		When("an Agent resource with a valid CAPI-controlled ClusterDeployment reference but no ABCs", func() {
-			It("should return error", func() {
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
-
+		When("an Agent resource with a valid Machine reference but the ABC does not exist", func() {
+			It("should reconcile with an error", func() {
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+
+				By("Creating the BMH, Metal3Machine and Machine")
 				bmh := testutils.NewBareMetalHost(namespace, bmhName)
 				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-				Expect(k8sClient.Create(ctx, bmh))
-
 				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 				m3machine.Annotations = map[string]string{
 					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
 				}
-
 				machine := testutils.NewMachine(namespace, machineName, clusterName)
 				machine.Spec.Bootstrap.ConfigRef = &corev1.ObjectReference{
 					Name:      abcName,
 					Namespace: namespace,
 				}
 				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
-				Expect(k8sClient.Create(ctx, m3machine))
-				Expect(k8sClient.Create(ctx, machine))
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
 
+				By("Reconciling the Agent")
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(agent),
 				})
@@ -216,186 +154,62 @@ var _ = Describe("InfraEnv Controller", func() {
 				).To(Equal("agentbootstrapconfigs.bootstrap.cluster.x-k8s.io \"test-resource\" not found"))
 			})
 		})
-		When(
-			"an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, but no reported interface yet",
-			func() {
-				It("should not return error", func() {
-					abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-					Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-
-					cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-					cd.Labels = map[string]string{
-						clusterv1.ClusterNameLabel: clusterName,
-					}
-					Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-					agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-					Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-
-					result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-						NamespacedName: client.ObjectKeyFromObject(agent),
-					})
-					var requeueNotSet time.Duration
-					Expect(err).NotTo(HaveOccurred())
-					Expect(result.Requeue).To(BeFalse())
-					Expect(result.RequeueAfter).To(Equal(requeueNotSet))
-				})
-			},
-		)
-		When(
-			"an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, and reported interfaces",
-			func() {
-				It("should return error if BMH is not found", func() {
-					abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-					Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-
-					cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-					cd.Labels = map[string]string{
-						clusterv1.ClusterNameLabel: clusterName,
-					}
-					Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-					agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-					agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-						{
-							Name:       "dummy",
-							MacAddress: agentInterfaceMACAddress,
-						},
-					}
-					Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-
-					_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-						NamespacedName: client.ObjectKeyFromObject(agent),
-					})
-					Expect(err).To(HaveOccurred())
-					Expect(
-						err.Error(),
-					).To(Equal("found 0 BMHs, and none matched any MacAddress from the agent's 1 interfaces"))
-				})
-			},
-		)
-		When("an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, reported interfaces", func() {
-			It("should return error if no matching BMH is not found", func() {
+		When("an Agent resource with a valid Machine with ABCs, and reported interfaces", func() {
+			It("should return error if BMH is not found", func() {
+				By("Creating the AgentBootstrapConfig")
 				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
 				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.Spec.BootMACAddress = "00-B0-D0-63-C1-11"
-				Expect(k8sClient.Create(ctx, bmh))
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
 
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: client.ObjectKeyFromObject(agent),
-				})
-				Expect(err).To(HaveOccurred())
-				Expect(
-					err.Error(),
-				).To(Equal("found 1 BMHs, and none matched any MacAddress from the agent's 1 interfaces"))
-			})
-		})
-		When("an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, reported interfaces", func() {
-			It("should return error if matching BMH is found, but no metal3machine is found", func() {
-				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-				Expect(k8sClient.Create(ctx, bmh))
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
-				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: client.ObjectKeyFromObject(agent),
-				})
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(Equal("found 0 metal3machines, none matching BMH test-namespace/test-bmh"))
-			})
-		})
-		When("an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, reported interfaces", func() {
-			It("should return error if matching BMH is found, but no matching metal3machine is found", func() {
-				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-
-				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-				Expect(k8sClient.Create(ctx, bmh))
-
-				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
-				Expect(k8sClient.Create(ctx, m3machine))
-
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
-				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
-
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: client.ObjectKeyFromObject(agent),
-				})
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(Equal("found 1 metal3machines, none matching BMH test-namespace/test-bmh"))
-			})
-		})
-		When("an Agent resource with a valid CAPI-controlled ClusterDeployment with ABCs, reported interfaces", func() {
-			It("should return error if matching BMH+metal3machine is found, but no machine is found", func() {
-				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-
-				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-				Expect(k8sClient.Create(ctx, bmh))
-
+				By("Creating the Metal3Machine, and Machine")
 				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 				m3machine.Annotations = map[string]string{
 					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
 				}
-				Expect(k8sClient.Create(ctx, m3machine))
+				machine := testutils.NewMachine(namespace, machineName, clusterName)
+				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
 
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
+				By("Reconciling the Agent")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(agent),
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(
+					err.Error(),
+				).To(Equal("found 0 BMHs, but none matched any of the MacAddresses from the agent's 1 interfaces"))
 
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
+				By("Checking the results of reconciliation")
+				postABC := &bootstrapv1alpha1.AgentBootstrapConfig{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), postABC)).To(Succeed())
+				Expect(postABC.Status.AgentRef).To(BeNil())
+			})
+		})
+		When("an Agent resource with a valid Machine with ABCs, reported interfaces", func() {
+			It("should return error if no matching BMH is not found", func() {
+				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
+				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
+
+				By("Creating the BMH, Metal3Machine, and Machine")
+				bmh := testutils.NewBareMetalHost(namespace, bmhName)
+				bmh.Spec.BootMACAddress = "00-B0-D0-63-C1-11"
+				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
+				m3machine.Annotations = map[string]string{
+					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
 				}
+				machine := testutils.NewMachine(namespace, machineName, clusterName)
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
+
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -404,102 +218,142 @@ var _ = Describe("InfraEnv Controller", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(
 					err.Error(),
-				).To(Equal(fmt.Sprintf("no machine found for metal3machine %s/%s", namespace, metal3MachineName)))
+				).To(Equal("found 1 BMHs, but none matched any of the MacAddresses from the agent's 1 interfaces"))
 			})
 		})
-		When("an Agent resource with matching matching BMH, metal3machine, machine (worker)", func() {
-			It("should reconcile with a valid accepted worker agent", func() {
-				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
-
+		When("an Agent resource with a valid Machine with ABCs, reported interfaces", func() {
+			It("should return error if matching BMH is found, but no metal3machine is found", func() {
+				By("Creating the BMH")
 				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.UID = "foobar"
 				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
 				Expect(k8sClient.Create(ctx, bmh))
 
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
+				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+
+				By("Reconciling the Agent")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(agent),
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(Equal("couldn't find *v1beta1.Metal3Machine owner for *v1alpha1.BareMetalHost"))
+			})
+		})
+
+		When("an Agent resource with a valid Machine with ABCs, reported interfaces", func() {
+			It("should return error if matching BMH+metal3machine is found, but no machine is found", func() {
+				By("Creating the AgentBootstrapConfig")
+				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
+				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
+
+				By("Creating the BMH and Metal3Machine")
+				bmh := testutils.NewBareMetalHost(namespace, bmhName)
+				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
+				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
+				m3machine.Annotations = map[string]string{
+					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
+				}
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
+
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
+				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
+
+				By("Reconciling the Agent")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(agent),
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(
+					err.Error(),
+				).To(Equal("couldn't find *v1beta1.Machine owner for *v1beta1.Metal3Machine"))
+			})
+		})
+
+		When("an Agent resource with matching matching BMH, metal3machine, machine (worker)", func() {
+			It("should reconcile with a valid accepted worker agent", func() {
+				By("Creating the AgentBootstrapConfig")
+				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
+				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
+
+				By("Creating the BMH, Metal3Machine and Machine")
+				bmh := testutils.NewBareMetalHost(namespace, bmhName)
+				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
 				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 				m3machine.Annotations = map[string]string{
 					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
 				}
 				machine := testutils.NewMachine(namespace, machineName, clusterName)
 				machine.Spec.Bootstrap.ConfigRef = &corev1.ObjectReference{
-					Name:      abc.Name,
-					Namespace: abc.Namespace,
+					Name:      abcName,
+					Namespace: namespace,
 				}
 				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
-				Expect(k8sClient.Create(ctx, m3machine))
-				Expect(k8sClient.Create(ctx, machine))
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
 
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
+				By("Reconciling the Agent")
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(agent),
 				})
 				Expect(err).NotTo(HaveOccurred())
 
+				By("Checking the result of the reconciliation")
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(agent), agent)).To(Succeed())
 				assertAgentIsReadyWithRole(agent, bmh, models.HostRoleWorker)
 			})
 		})
 		When("an Agent resource with matching matching BMH, metal3machine, machine (master)", func() {
 			It("should reconcile with a valid accepted master agent", func() {
+				By("Creating the AgentBootstrapConfig")
 				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
 				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
 
+				By("Creating the BMH, Metal3Machine and Machine")
 				bmh := testutils.NewBareMetalHost(namespace, bmhName)
-				bmh.UID = "foobar"
 				bmh.Spec.BootMACAddress = agentInterfaceMACAddress
-				Expect(k8sClient.Create(ctx, bmh))
-
 				m3machine := testutils.NewMetal3Machine(namespace, metal3MachineName)
 				m3machine.Annotations = map[string]string{
 					baremetal.HostAnnotation: strings.Join([]string{namespace, bmhName}, "/"),
 				}
 				machine := testutils.NewMachine(namespace, machineName, clusterName)
-				machine.Labels[clusterv1.MachineControlPlaneLabel] = "control-plane"
 				machine.Spec.Bootstrap.ConfigRef = &corev1.ObjectReference{
-					Name:      abc.Name,
-					Namespace: abc.Namespace,
+					Name:      abcName,
+					Namespace: namespace,
 				}
+				machine.Labels[clusterv1.MachineControlPlaneLabel] = "control-plane"
 				Expect(controllerutil.SetOwnerReference(machine, m3machine, testScheme)).To(Succeed())
-				Expect(k8sClient.Create(ctx, m3machine))
-				Expect(k8sClient.Create(ctx, machine))
+				Expect(controllerutil.SetOwnerReference(m3machine, bmh, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, m3machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+				Expect(k8sClient.Create(ctx, bmh)).To(Succeed())
 
-				cd := testutils.NewClusterDeployment(namespace, clusterDeploymentName)
-				cd.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: clusterName,
-				}
-				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
-
-				agent := testutils.NewAgentWithClusterDeploymentReference(namespace, agentName, *cd)
-				agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
-					{
-						Name:       "dummy",
-						MacAddress: agentInterfaceMACAddress,
-					},
-				}
+				By("Creating the Agent")
+				agent := testutils.NewAgentWithInterface(namespace, agentName, agentInterfaceMACAddress)
 				Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
+				By("Reconciling the Agent")
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(agent),
 				})
 				Expect(err).NotTo(HaveOccurred())
 
+				By("Checking the result of the reconciliation")
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(agent), agent)).To(Succeed())
 				assertAgentIsReadyWithRole(agent, bmh, models.HostRoleMaster)
+				postABC := &bootstrapv1alpha1.AgentBootstrapConfig{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), postABC)).To(Succeed())
+				Expect(postABC.Status.AgentRef).NotTo(BeNil())
+				Expect(postABC.Status.AgentRef.Name).To(Equal(agent.Name))
 			})
 		})
 	})

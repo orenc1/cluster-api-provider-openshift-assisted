@@ -14,7 +14,7 @@ import (
 )
 
 func NewAgentClusterInstall(name string, namespace string, ownerCluster string) *hiveext.AgentClusterInstall {
-	cd := &hiveext.AgentClusterInstall{
+	aci := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
@@ -24,8 +24,9 @@ func NewAgentClusterInstall(name string, namespace string, ownerCluster string) 
 		},
 		Spec: hiveext.AgentClusterInstallSpec{},
 	}
-	return cd
+	return aci
 }
+
 func NewClusterDeployment(namespace, name string) *hivev1.ClusterDeployment {
 	cd := &hivev1.ClusterDeployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -167,6 +168,10 @@ func NewAgentControlPlaneWithMachineTemplate(
 
 func NewMetal3Machine(namespace, name string) *metal3.Metal3Machine {
 	return &metal3.Metal3Machine{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Metal3Machine",
+			APIVersion: metal3.GroupVersion.String(),
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: namespace,
 			Name:      name,
@@ -194,6 +199,17 @@ func NewAgent(namespace, name string) *v1beta1.Agent {
 			Namespace: namespace,
 		},
 	}
+}
+
+func NewAgentWithInterface(namespace, name, macAddress string) *v1beta1.Agent {
+	agent := NewAgent(namespace, name)
+	agent.Status.Inventory.Interfaces = []v1beta1.HostInterface{
+		{
+			Name:       "test-interface",
+			MacAddress: macAddress,
+		},
+	}
+	return agent
 }
 
 func NewAgentWithClusterDeploymentReference(namespace, name string, cd hivev1.ClusterDeployment) *v1beta1.Agent {
