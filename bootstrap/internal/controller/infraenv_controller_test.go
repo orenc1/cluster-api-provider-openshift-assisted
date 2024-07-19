@@ -32,6 +32,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+const (
+	DownloadURL = "https://example.com/my-image"
+)
+
 var _ = Describe("InfraEnv Controller", func() {
 	Context("When reconciling a resource", func() {
 		ctx := context.Background()
@@ -109,7 +113,7 @@ var _ = Describe("InfraEnv Controller", func() {
 				infraEnv.Labels = map[string]string{
 					clusterv1.ClusterNameLabel: clusterName,
 				}
-				infraEnv.Status.ISODownloadURL = "https://example.com/my-image"
+				infraEnv.Status.ISODownloadURL = DownloadURL
 				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
 				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
 				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
@@ -134,7 +138,7 @@ var _ = Describe("InfraEnv Controller", func() {
 				infraEnv.Labels = map[string]string{
 					clusterv1.ClusterNameLabel: clusterName,
 				}
-				infraEnv.Status.ISODownloadURL = "https://example.com/my-image"
+				infraEnv.Status.ISODownloadURL = DownloadURL
 				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
 				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
 				abc.Status.InfraEnvRef = &corev1.ObjectReference{
@@ -153,6 +157,183 @@ var _ = Describe("InfraEnv Controller", func() {
 				By("checking that the AgentBootstrapConfig does have its ISO URL set")
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
 				Expect(abc.Status.ISODownloadURL).To(Equal(infraEnv.Status.ISODownloadURL))
+			})
+		})
+	})
+	Context("InfraEnv Controller uses internal URL for the ISO", func() {
+
+		const (
+			assistedNamespace = "assisted-test-namespace"
+		)
+		var (
+			ctx                  = context.Background()
+			controllerReconciler *InfraEnvReconciler
+			k8sClient            client.Client
+			abc                  *bootstrapv1alpha1.AgentBootstrapConfig
+		)
+
+		BeforeEach(func() {
+			k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
+				WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
+				Build()
+			Expect(k8sClient).NotTo(BeNil())
+
+			controllerReconciler = &InfraEnvReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Config: InfraEnvControllerConfig{
+					UseInternalImageURL:   true,
+					ImageServiceNamespace: assistedNamespace,
+					ImageServiceName:      "assisted-image-service",
+				},
+			}
+
+			By("creating the test namespaces")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: namespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			assistedNS := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: assistedNamespace,
+				},
+			}
+			Expect(k8sClient.Create(ctx, assistedNS)).To(Succeed())
+
+			By("creating the InfraEnv and AgentBootstrapConfig")
+			infraEnv := testutils.NewInfraEnv(namespace, infraEnvName)
+			infraEnv.Labels = map[string]string{
+				clusterv1.ClusterNameLabel: clusterName,
+			}
+			infraEnv.Status.ISODownloadURL = DownloadURL
+			Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
+			abc = NewAgentBootstrapConfig(namespace, abcName, clusterName)
+			abc.Status.InfraEnvRef = &corev1.ObjectReference{
+				Name: infraEnv.Name,
+			}
+			Expect(k8sClient.Create(ctx, abc)).To(Succeed())
+		})
+
+		AfterEach(func() {
+			k8sClient = nil
+			controllerReconciler = nil
+		})
+
+		When("The image service service doesn't exists", func() {
+			It("should return an error and ABC status should be empty", func() {
+				By("reconciling the InfraEnv")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      infraEnvName,
+						Namespace: namespace,
+					},
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(Equal("failed to find assisted image service service: services \"assisted-image-service\" not found"))
+
+				By("checking that the AgentBootstrapConfig does not have its ISO URL set")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+				Expect(abc.Status.ISODownloadURL).To(BeEmpty())
+			})
+		})
+
+		When("The image service service doesn't have a cluster IP", func() {
+			It("should return an error and ABC status should be empty", func() {
+				By("creating the image service service")
+				svc := &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "assisted-image-service",
+						Namespace: assistedNamespace,
+					},
+					Spec: corev1.ServiceSpec{
+						Ports: []corev1.ServicePort{
+							{
+								Port: 8080,
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+				By("reconciling the InfraEnv")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      infraEnvName,
+						Namespace: namespace,
+					},
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(Equal("failed to get internal image service URL, either cluster IP or Ports were missing from Service"))
+
+				By("checking that the AgentBootstrapConfig does not have its ISO URL set")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+				Expect(abc.Status.ISODownloadURL).To(BeEmpty())
+			})
+		})
+
+		When("The image service service doesn't have any Ports", func() {
+			It("should return an error and ABC status should be empty", func() {
+				By("creating the image service service")
+				svc := &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "assisted-image-service",
+						Namespace: assistedNamespace,
+					},
+					Spec: corev1.ServiceSpec{
+						ClusterIP: "172.0.0.1",
+					},
+				}
+				Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+				By("reconciling the InfraEnv")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      infraEnvName,
+						Namespace: namespace,
+					},
+				})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(Equal("failed to get internal image service URL, either cluster IP or Ports were missing from Service"))
+
+				By("checking that the AgentBootstrapConfig does not have its ISO URL set")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+				Expect(abc.Status.ISODownloadURL).To(BeEmpty())
+			})
+		})
+
+		When("The image service service exists", func() {
+			It("should update ABC status with the internal URL instead of the InfraEnv's URL", func() {
+				By("creating the image service service")
+				svc := &corev1.Service{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "assisted-image-service",
+						Namespace: assistedNamespace,
+					},
+					Spec: corev1.ServiceSpec{
+						ClusterIP: "172.0.0.1",
+						Ports: []corev1.ServicePort{
+							{
+								Port: 8080,
+							},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, svc)).To(Succeed())
+
+				By("reconciling the InfraEnv")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      infraEnvName,
+						Namespace: namespace,
+					},
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("checking that the AgentBootstrapConfig does have its ISO URL set")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(abc), abc)).To(Succeed())
+				Expect(abc.Status.ISODownloadURL).To(Equal("http://172.0.0.1:8080/my-image"))
 			})
 		})
 	})

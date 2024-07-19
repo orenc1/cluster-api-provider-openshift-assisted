@@ -7,6 +7,7 @@ toolchain go1.22.2
 require (
 	github.com/coreos/ignition/v2 v2.18.0
 	github.com/golang/mock v1.6.0
+	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/metal3-io/baremetal-operator/apis v0.6.0
 	github.com/metal3-io/cluster-api-provider-metal3 v1.7.0
 	github.com/metal3-io/cluster-api-provider-metal3/api v1.7.0

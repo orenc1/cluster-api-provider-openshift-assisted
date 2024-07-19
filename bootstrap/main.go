@@ -21,6 +21,8 @@ import (
 	"flag"
 	"os"
 
+	"github.com/kelseyhightower/envconfig"
+
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
@@ -53,6 +55,10 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+var Options struct {
+	InfraEnvControllerConfig controller.InfraEnvControllerConfig
+}
 
 func init() {
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
@@ -138,6 +144,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := envconfig.Process("", &Options); err != nil {
+		setupLog.Error(err, "unable to process environment variables")
+		os.Exit(1)
+	}
+
 	if err = (&controller.AgentBootstrapConfigReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
@@ -148,6 +159,7 @@ func main() {
 	if err = (&controller.InfraEnvReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Config: Options.InfraEnvControllerConfig,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "InfraEnv")
 		os.Exit(1)

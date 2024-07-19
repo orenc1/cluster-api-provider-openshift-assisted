@@ -35,8 +35,6 @@ After this we will be able to initialize clusterctl:
 clusterctl init --bootstrap openshift-agent --control-plane openshift-agent -i  metal3:v1.7.0
 ```
 
-
-
 ## Architecture Design
 
 [Detailed architecture design](./docs/architecture_design.md)
@@ -74,6 +72,91 @@ kubectl apply -k config/samples/
 ```
 
 >**NOTE**: Ensure that the samples has default values to test it out.
+
+## Deploy on vanilla Kubernetes
+This provider is configured to deploy on [Red Hat OpenShift](https://www.redhat.com/en/technologies/cloud-computing/openshift) (OCP) by default.
+
+To deploy this provider on vanilla Kubernetes, the following must be done:
+
+### Prerequisites
+
+A vanilla Kubernetes such as [Kind](https://kind.sigs.k8s.io/) must be deployed and you must be authenticated to the cluster.
+
+In addition to the prerequisites section above, the following services are required on your cluster before installing this provider.
+
+1. Install [Assisted-Service operator](https://github.com/openshift/assisted-service/blob/master/docs/dev/operator-on-kind.md)
+2. Install [CAPI](https://cluster-api.sigs.k8s.io/user/quick-start.html)
+3. Install [CAPM3](https://book.metal3.io/capm3/installation_guide)
+
+The following CLI tools are required:
+
+1. [kustomize](https://kubectl.docs.kubernetes.io/installation/kustomize/)
+
+
+### Deploy Providers
+
+Create kustomize files for the providers
+
+**Bootstrap Provider**
+```bash
+mkdir -p bootstrap
+cat <<EOF > bootstrap/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- https://github.com/openshift-assisted/cluster-api-agent/bootstrap/config/default?ref=master
+
+patches:
+- patch: |-
+    - op: add
+      path: "/spec/template/spec/containers/1/env/-"
+      value:
+        name: USE_INTERNAL_IMAGE_URL
+        value: "true"
+  target:
+    group: apps
+    version: v1
+    kind: Deployment
+    namespace: system
+    name: controller-manager
+EOF
+```
+
+_NOTE_: The `path` for the patch is fragile, ensure that the container index is correct.
+
+The overrides listed in the [Configuration](#configuration) section below can also be patched here.
+
+**Control Plane Provider**
+
+```bash
+mkdir -p controlplane
+cat <<EOF > controlplane/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- https://github.com/openshift-assisted/cluster-api-agent/controlplane/config/default?ref=master
+EOF
+```
+
+Run the following to define and create the CRs for the controllers:
+```bash
+kustomize build bootstrap > bootstrap_config.yaml
+kustomize build controlplane > controlplane_config.yaml
+
+kubectl apply -f bootstrap_config.yaml
+kubectl apply -f controlplane_config.yaml
+```
+
+### Configuration
+
+The following environment variables can be overridden for the bootstrap provider:
+
+| Environment Variable | Description | Default |
+|-----------------------| --------------| --------|
+| `USE_INTERNAL_IMAGE_URL` | Enables the bootstrap controller to use the internal IP of assisted-image-service. The internal IP is used in place of the default URL of the live ISO provided by assisted-service to boot hosts. | `"false"`| 
+| `IMAGE_SERVICE_NAME` | Name of the Service CR for assisted-image-service. This contains the internal IP of the assisted-image-service | `assisted-image-service` |
+| `IMAGE_SERVICE_NAMESPACE` | Namespace that the assisted-image-service's Service CR is in | Defaults to the namespace the bootstrap provider is running in if unset|
+
 
 ### To Uninstall
 **Delete the instances (CRs) from the cluster:**
