@@ -19,8 +19,10 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/coreos/go-semver/semver"
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha1"
@@ -52,6 +54,7 @@ import (
 )
 
 const (
+	minOpenShiftVersion       = "4.14.0"
 	agentControlPlaneKind     = "AgentControlPlane"
 	acpFinalizer              = "agentcontrolplane." + controlplanev1alpha1.Group + "/deprovision"
 	placeholderPullSecretName = "placeholder-pull-secret"
@@ -62,6 +65,8 @@ type AgentControlPlaneReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
+
+var minVersion = semver.New(minOpenShiftVersion)
 
 // +kubebuilder:rbac:groups=bootstrap.cluster.x-k8s.io,resources=agentbootstrapconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=infrastructure.cluster.x-k8s.io,resources=metal3machines,verbs=get;list;watch;create;update;patch;delete
@@ -121,6 +126,17 @@ func (r *AgentControlPlaneReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if !controllerutil.ContainsFinalizer(acp, acpFinalizer) {
 		controllerutil.AddFinalizer(acp, acpFinalizer)
+	}
+
+	acpVersion, err := semver.NewVersion(acp.Spec.Version)
+	if err != nil {
+		log.Error(err, "invalid OpenShift version", "version", acp.Spec.Version)
+		return ctrl.Result{}, err
+	}
+	if acpVersion.LessThan(*minVersion) {
+		conditions.MarkFalse(acp, controlplanev1alpha1.MachinesCreatedCondition, controlplanev1alpha1.MachineGenerationFailedReason,
+			clusterv1.ConditionSeverityError, fmt.Sprintf("version %v is not supported, the minimum supported version is %s", acp.Spec.Version, minOpenShiftVersion))
+		return ctrl.Result{}, nil
 	}
 
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, acp.ObjectMeta)

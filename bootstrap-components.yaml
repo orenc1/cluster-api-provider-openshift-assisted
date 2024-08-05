@@ -613,52 +613,13 @@ rules:
   - secrets
   verbs:
   - create
-  - delete
   - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - agent-install.openshift.io
   resources:
   - agents
   verbs:
-  - create
   - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - agent-install.openshift.io
-  resources:
-  - agents/status
-  verbs:
-  - get
-  - patch
-  - update
-- apiGroups:
-  - agent-install.openshift.io
-  resources:
-  - infraenvs
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - agent-install.openshift.io
-  resources:
-  - infraenvs/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - bootstrap.cluster.x-k8s.io
   resources:
@@ -700,27 +661,12 @@ rules:
   - machinedeployments/status
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - cluster.x-k8s.io
   resources:
   - machines
   verbs:
   - get
-  - watch
-- apiGroups:
-  - cluster.x-k8s.io
-  resources:
-  - machines
-  - machines/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - controlplane.cluster.x-k8s.io
@@ -728,8 +674,6 @@ rules:
   - agentcontrolplanes
   verbs:
   - get
-  - list
-  - watch
 - apiGroups:
   - extensions.hive.openshift.io
   resources:
@@ -738,33 +682,12 @@ rules:
   verbs:
   - get
   - list
-  - watch
-- apiGroups:
-  - extensions.hive.openshift.io
-  resources:
-  - agentclusterinstalls/status
-  verbs:
-  - get
 - apiGroups:
   - hive.openshift.io
   resources:
   - clusterdeployments
   verbs:
-  - get
   - list
-  - watch
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
-  - metal3machines
-  - metal3machines/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
@@ -774,29 +697,6 @@ rules:
   verbs:
   - get
   - update
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
-  - metal3machinetemplates
-  - metal3machinetemplates/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - metal3.io
-  resources:
-  - baremetalhosts
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
