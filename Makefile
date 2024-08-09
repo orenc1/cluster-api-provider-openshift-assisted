@@ -162,7 +162,7 @@ build-installer:
 	$(MAKE) build-installer-provider PROVIDER=controlplane
 
 .PHONY: build-installer-provider
-build-installer-provider:: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
+build-installer-provider: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
 	mkdir -p dist
 	cd $(PROVIDER)/config/manager && $(KUSTOMIZE) edit set image controller=${IMG}
 	$(KUSTOMIZE) build $(PROVIDER)/config/default > dist/$(PROVIDER)_install.yaml
