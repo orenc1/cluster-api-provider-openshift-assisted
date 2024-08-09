@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentinstalladmission
+  namespace: assisted-installer
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      agentinstalladmission: "true"
+      app: agentinstalladmission
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        agentinstalladmission: "true"
+        app: agentinstalladmission
+      name: agentinstalladmission
+    spec:
+      containers:
+      - command:
+        - /assisted-service-admission
+        - --secure-port=9443
+        - --audit-log-path=-
+        - --tls-cert-file=/var/serving-cert/tls.crt
+        - --tls-private-key-file=/var/serving-cert/tls.key
+        image: quay.io/edge-infrastructure/assisted-service@sha256:cffbdc5fd51c08f16ec2aa484cf226e3b29510919a8aa9668d766007de8f3d79
+        imagePullPolicy: IfNotPresent
+        name: agentinstalladmission
+        ports:
+        - containerPort: 9443
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: 9443
+            scheme: HTTPS
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /var/serving-cert
+          name: serving-cert
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: agentinstalladmission
+      serviceAccountName: agentinstalladmission
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: serving-cert
+        secret:
+          defaultMode: 420
+          secretName: agentinstalladmission

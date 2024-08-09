@@ -1,0 +1,46 @@
+apiVersion: agent-install.openshift.io/v1beta1
+kind: AgentServiceConfig
+metadata:
+  name: agent
+spec:
+  ingress:
+    className: nginx
+    #assistedServiceHostname: "10.10.10.10"
+    #imageServiceHostname: "12.12.12.12"
+    assistedServiceHostname: "assisted-service.assisted-installer.com"
+    imageServiceHostname: "assisted-image.assisted-installer.com"
+  databaseStorage:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: "10Gi"
+  filesystemStorage:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: "10Gi"
+  imageStorage:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: "10Gi"
+  osImages:
+  - openshiftVersion: "4.14"
+    cpuArchitecture: "x86_64"
+    url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.14/4.14.34/rhcos-4.14.34-x86_64-live.x86_64.iso"
+    version: "414.92.202407091253-0"
+  - openshiftVersion: "4.15"
+    cpuArchitecture: "x86_64"
+    url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.15/4.15.23/rhcos-4.15.23-x86_64-live.x86_64.iso"
+    version: "415.92.202407091355-0"
+  - openshiftVersion: "4.16"
+    cpuArchitecture: "x86_64"
+    url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.16/4.16.3/rhcos-4.16.3-x86_64-live.x86_64.iso"
+    version: "416.94.202406251923-0"
+  - openshiftVersion: "4.17"
+    cpuArchitecture: "x86_64"
+    url: "https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/pre-release/4.17.0-ec.2/rhcos-4.17.0-ec.2-x86_64-live.x86_64.iso"
+    version: "417.94.202407010929-0"

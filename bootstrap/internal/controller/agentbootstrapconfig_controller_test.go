@@ -437,6 +437,17 @@ func NewAgentBootstrapConfigWithOwner(
 }
 
 func NewAgentBootstrapConfig(namespace, name, clusterName string) *bootstrapv1alpha1.AgentBootstrapConfig {
+	return NewAgentBootstrapConfigWithInfraEnv(namespace, name, clusterName, nil)
+}
+
+func NewAgentBootstrapConfigWithInfraEnv(namespace, name, clusterName string, infraEnv *v1beta1.InfraEnv) *bootstrapv1alpha1.AgentBootstrapConfig {
+	var ref *corev1.ObjectReference
+	if infraEnv != nil {
+		ref = &corev1.ObjectReference{
+			Namespace: infraEnv.GetNamespace(),
+			Name:      infraEnv.GetName(),
+		}
+	}
 	return &bootstrapv1alpha1.AgentBootstrapConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{
@@ -445,6 +456,9 @@ func NewAgentBootstrapConfig(namespace, name, clusterName string) *bootstrapv1al
 			},
 			Name:      name,
 			Namespace: namespace,
+		},
+		Status: bootstrapv1alpha1.AgentBootstrapConfigStatus{
+			InfraEnvRef: ref,
 		},
 	}
 }

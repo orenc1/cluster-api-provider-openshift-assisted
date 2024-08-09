@@ -1,0 +1,114 @@
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: agentclusterinstallmutators.admission.agentinstall.openshift.io
+webhooks:
+- name: agentclusterinstallmutators.admission.agentinstall.openshift.io
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      namespace: default
+      name: kubernetes
+      port: 443
+      path: /apis/admission.agentinstall.openshift.io/v1/agentclusterinstallmutators
+  rules:
+  - apiGroups:
+    - extensions.hive.openshift.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - UPDATE
+    - CREATE
+    resources:
+    - agentclusterinstalls
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: agentclusterinstallvalidators.admission.agentinstall.openshift.io
+webhooks:
+- name: agentclusterinstallvalidators.admission.agentinstall.openshift.io
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      namespace: default
+      name: kubernetes
+      port: 443
+      path: /apis/admission.agentinstall.openshift.io/v1/agentclusterinstallmutators
+  rules:
+  - apiGroups:
+    - extensions.hive.openshift.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - UPDATE
+    - CREATE
+    resources:
+    - agentclusterinstalls
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: agentvalidators.admission.agentinstall.openshift.io
+webhooks:
+- name: agentvalidators.admission.agentinstall.openshift.io
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      namespace: default
+      name: kubernetes
+      port: 443
+      path: /apis/admission.agentinstall.openshift.io/v1/agentvalidators
+  rules:
+  - apiGroups:
+    - agent-install.openshift.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - UPDATE
+    resources:
+    - agents
+
+---
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: infraenvvalidators.admission.agentinstall.openshift.io
+webhooks:
+- name: infraenvvalidators.admission.agentinstall.openshift.io
+  failurePolicy: Fail
+  sideEffects: None
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      namespace: default
+      name: kubernetes
+      port: 443
+      path: /apis/admission.agentinstall.openshift.io/v1/infraenvvalidators
+  rules:
+  - apiGroups:
+    - agent-install.openshift.io
+    apiVersions:
+    - v1beta1
+    operations:
+    - UPDATE
+    - CREATE
+    resources:
+    - infraenvs

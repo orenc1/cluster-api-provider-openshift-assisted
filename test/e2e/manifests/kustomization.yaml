@@ -1,0 +1,8 @@
+kind: Kustomization
+resources:
+  - ./namespace
+  - ./assisted-ca
+  - ./agentinstalladmission
+  - ./assisted-image-service
+  - ./assisted-service 
+

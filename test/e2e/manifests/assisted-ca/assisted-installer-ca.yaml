@@ -1,0 +1,41 @@
+---
+
+# This issuer is used to generate the the self signed certificate our our CA.
+
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  namespace: assisted-installer
+  name: assisted-installer-selfsigned-ca
+spec:
+  selfSigned: {}
+
+---
+
+# This is the certifate of our CA.
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: assisted-installer
+  name: assisted-installer-ca
+spec:
+  commonName: Assisted Installer CA
+  isCA: true
+  issuerRef:
+    kind: Issuer
+    name: assisted-installer-selfsigned-ca
+  secretName: assisted-installer-ca
+
+---
+
+# This is the issuer of our CA:
+
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  namespace: assisted-installer
+  name: assisted-installer-ca
+spec:
+  ca:
+    secretName: assisted-installer-ca

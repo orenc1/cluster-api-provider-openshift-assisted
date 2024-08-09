@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
@@ -31,9 +32,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	abcInfraEnvRefFieldName      = ".status.infraEnvRef.name"
+	abcInfraEnvRefFieldNamespace = ".status.infraEnvRef.namespace"
 )
 
 type InfraEnvControllerConfig struct {
@@ -54,8 +59,30 @@ type InfraEnvReconciler struct {
 	Config InfraEnvControllerConfig
 }
 
+func filterRefName(rawObj client.Object) []string {
+	abc, ok := rawObj.(*bootstrapv1alpha1.AgentBootstrapConfig)
+	if !ok || abc.Status.InfraEnvRef == nil {
+		return nil
+	}
+	return []string{abc.Status.InfraEnvRef.Name}
+}
+
+func filterRefNamespace(rawObj client.Object) []string {
+	abc, ok := rawObj.(*bootstrapv1alpha1.AgentBootstrapConfig)
+	if !ok || abc.Status.InfraEnvRef == nil {
+		return nil
+	}
+	return []string{abc.Status.InfraEnvRef.Namespace}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *InfraEnvReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.TODO(), &bootstrapv1alpha1.AgentBootstrapConfig{}, abcInfraEnvRefFieldNamespace, filterRefNamespace); err != nil {
+		return err
+	}
+	if err := mgr.GetFieldIndexer().IndexField(context.TODO(), &bootstrapv1alpha1.AgentBootstrapConfig{}, abcInfraEnvRefFieldName, filterRefName); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&aiv1beta1.InfraEnv{}).
 		Complete(r)
@@ -68,45 +95,66 @@ func (r *InfraEnvReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := r.Client.Get(ctx, req.NamespacedName, infraEnv); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	log.WithValues("infra_env", infraEnv.Name, "infra_env_namespace", infraEnv.Namespace)
+	log = log.WithValues("infra_env", infraEnv.Name, "infra_env_namespace", infraEnv.Namespace)
 
 	if infraEnv.Status.ISODownloadURL == "" {
 		log.V(logutil.TraceLevel).Info("image URL not available yet")
-		return ctrl.Result{}, nil
+		// requeue so we'll make sure we'll have the ISO available.
+		// NOTE: We should not need this, as InfraEnv should notify us when changing status
+		return ctrl.Result{Requeue: true, RequeueAfter: retryAfter}, nil
 	}
-	return ctrl.Result{}, r.attachISOToAgentBootstrapConfigs(ctx, infraEnv)
+	err := r.attachISOToAgentBootstrapConfigs(ctx, infraEnv)
+	if err != nil {
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, err
+	}
+	return ctrl.Result{}, nil
+
 }
 
 func (r *InfraEnvReconciler) attachISOToAgentBootstrapConfigs(ctx context.Context, infraEnv *aiv1beta1.InfraEnv) error {
-	clusterName, ok := infraEnv.Labels[clusterv1.ClusterNameLabel]
+	log := ctrl.LoggerFrom(ctx)
+
+	/*clusterName, ok := infraEnv.Labels[clusterv1.ClusterNameLabel]
 	if !ok {
 		return nil
 	}
-
+	*/
 	agentBootstrapConfigs := &bootstrapv1alpha1.AgentBootstrapConfigList{}
-	if err := r.Client.List(ctx, agentBootstrapConfigs, client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName}); err != nil {
+	/*if err := r.Client.List(ctx, agentBootstrapConfigs, client.MatchingLabels{clusterv1.ClusterNameLabel: clusterName}); err != nil {
+		return errors.Wrap(err, "failed to list agent bootstrap configs")
+	}*/
+	if err := r.Client.List(ctx, agentBootstrapConfigs, client.MatchingFields{abcInfraEnvRefFieldName: infraEnv.Name, abcInfraEnvRefFieldNamespace: infraEnv.Namespace}); err != nil {
 		return errors.Wrap(err, "failed to list agent bootstrap configs")
 	}
 
+	log.V(logutil.TraceLevel).Info("listing agentBoostrapConfigs", "items found", len(agentBootstrapConfigs.Items), "LIST AgentBootstrapConfigs", agentBootstrapConfigs)
 	downloadURL, err := r.getISOURL(ctx, infraEnv.Status.ISODownloadURL)
+	log.V(logutil.TraceLevel).Info("ISO URL from INFRAENV", "ISO URL", downloadURL)
+
 	if err != nil {
+		log.V(logutil.TraceLevel).Info("error retrieving downloadURL from infraenv", "infraenv", infraEnv)
 		return err
 	}
 
+	var errorIfSkipped error = nil
 	for _, agentBootstrapConfig := range agentBootstrapConfigs.Items {
-		if agentBootstrapConfig.Status.InfraEnvRef == nil ||
-			(agentBootstrapConfig.Status.InfraEnvRef != nil &&
-				agentBootstrapConfig.Status.InfraEnvRef.Name != infraEnv.Name) {
+		if agentBootstrapConfig.Status.InfraEnvRef == nil {
+			log.V(logutil.TraceLevel).Info("skipping agentbootstrapconfig because no infraenv ref", "abc", agentBootstrapConfig.Name)
+			errorIfSkipped = errors.New("skipped an infraenv, need to retry") // infraenv would change and retrigger though
+			continue
+		}
+		if agentBootstrapConfig.Status.InfraEnvRef.Name != infraEnv.Name {
+			log.V(logutil.TraceLevel).Info("skipping agentbootstrapconfig because not relevant", "abc", agentBootstrapConfig.Name)
 			continue
 		}
 
-		// Add ISO to agentBootstrapConfig status
 		agentBootstrapConfig.Status.ISODownloadURL = downloadURL
 		if err := r.Client.Status().Update(ctx, &agentBootstrapConfig); err != nil {
 			return errors.Wrap(err, "failed to update agentbootstrapconfig")
 		}
+		log.V(logutil.TraceLevel).Info("setting infraenv ref to agentbootstrapconfig", "abc", agentBootstrapConfig.Name)
 	}
-	return nil
+	return errorIfSkipped
 }
 
 func (r *InfraEnvReconciler) getISOURL(ctx context.Context, originalURL string) (string, error) {

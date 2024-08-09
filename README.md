@@ -199,6 +199,26 @@ Users can just run kubectl apply -f <URL for YAML BUNDLE> to install the project
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/<org>/cluster-api-agent/<tag or branch>/dist/install.yaml
 ```
+## Development
+
+### E2E testing
+
+To run e2e tests we need to fulfill the following requirements:
+* host with libvirt exposing qemu+ssh protocol. hostname and username are required (`qemu+ssh://<username>@<hostname>/system`)
+  * sshd running
+  * libvirtd running (ssh+qemu protocol should also be enabled)
+  * podman, networkmanager required
+* kubernetes controlplane running in an environment with connectivity with libvirt network. NOTE: for now controlplane is required to run on the same host as the one used for VMs. See future improvements
+  * connection is required, so make sure in `kind.yaml` `networking.apiServerAddress` is set to a reachable IP address and `networking.apiServerPort` is accessible
+
+Run `REMOTE_HOSTNAME=<host> REMOTE_USERNAME=<user> SSH_AUTHORIZED_KEY=<mykey> PULLSECRET=<base64 encoded pullsecret> KUBECONFIG=<path to kubeconfig> make test-e2e`
+
+The tests will use qemu connection to create necessary VMs, and will setup the nameserver on the same host.
+
+#### Future improvement
+* decouple where k8s controlplane is running from the host running the VMs
+  * Connectivity with VM host
+  * specific DNS settings will be required (maybe DNS settings can be patched to coredns?)
 
 ## Contributing
 // TODO(user): Add detailed information on how you would like others to contribute to this project

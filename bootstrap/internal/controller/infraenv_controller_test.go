@@ -43,9 +43,21 @@ var _ = Describe("InfraEnv Controller", func() {
 		var k8sClient client.Client
 
 		BeforeEach(func() {
+
 			k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
 				WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
+				WithIndex(
+					&bootstrapv1alpha1.AgentBootstrapConfig{},
+					abcInfraEnvRefFieldName,
+					filterRefName,
+				).
+				WithIndex(
+					&bootstrapv1alpha1.AgentBootstrapConfig{},
+					abcInfraEnvRefFieldNamespace,
+					filterRefNamespace,
+				).
 				Build()
+
 			Expect(k8sClient).NotTo(BeNil())
 
 			controllerReconciler = &InfraEnvReconciler{
@@ -140,10 +152,8 @@ var _ = Describe("InfraEnv Controller", func() {
 				}
 				infraEnv.Status.ISODownloadURL = DownloadURL
 				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
-				abc := NewAgentBootstrapConfig(namespace, abcName, clusterName)
-				abc.Status.InfraEnvRef = &corev1.ObjectReference{
-					Name: infraEnv.Name,
-				}
+
+				abc := NewAgentBootstrapConfigWithInfraEnv(namespace, abcName, clusterName, infraEnv)
 				Expect(k8sClient.Create(ctx, abc)).To(Succeed())
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -175,6 +185,16 @@ var _ = Describe("InfraEnv Controller", func() {
 		BeforeEach(func() {
 			k8sClient = fakeclient.NewClientBuilder().WithScheme(testScheme).
 				WithStatusSubresource(&bootstrapv1alpha1.AgentBootstrapConfig{}).
+				WithIndex(
+					&bootstrapv1alpha1.AgentBootstrapConfig{},
+					abcInfraEnvRefFieldName,
+					filterRefName,
+				).
+				WithIndex(
+					&bootstrapv1alpha1.AgentBootstrapConfig{},
+					abcInfraEnvRefFieldNamespace,
+					filterRefNamespace,
+				).
 				Build()
 			Expect(k8sClient).NotTo(BeNil())
 
@@ -209,10 +229,7 @@ var _ = Describe("InfraEnv Controller", func() {
 			}
 			infraEnv.Status.ISODownloadURL = DownloadURL
 			Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
-			abc = NewAgentBootstrapConfig(namespace, abcName, clusterName)
-			abc.Status.InfraEnvRef = &corev1.ObjectReference{
-				Name: infraEnv.Name,
-			}
+			abc = NewAgentBootstrapConfigWithInfraEnv(namespace, abcName, clusterName, infraEnv)
 			Expect(k8sClient.Create(ctx, abc)).To(Succeed())
 		})
 
