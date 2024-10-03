@@ -1,0 +1,15 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1.admission.agentinstall.openshift.io
+  annotations:
+    cert-manager.io/inject-ca-from: assisted-installer/agentinstalladmission
+spec:
+  group: admission.agentinstall.openshift.io
+  version: v1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    namespace: assisted-installer
+    name: agentinstalladmission
+    port: 443

@@ -176,7 +176,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 			"",
 		)
 
-		return ctrl.Result{}, nil
+		return ctrl.Result{Requeue: true, RequeueAfter: retryAfter}, nil
 	}
 	// Get the Machine that owns this agentbootstrapconfig
 	machine, err := capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
@@ -269,8 +269,7 @@ func (r *AgentBootstrapConfigReconciler) Reconcile(ctx context.Context, req ctrl
 		)
 		return ctrl.Result{}, err
 	}
-
-	log.Info("debug", "ns", config.Namespace)
+	log.V(logutil.TraceLevel).Info("metal3machine has ISO url", "abc", config)
 	secret, err := r.createUserDataSecret(ctx, config)
 	if err != nil {
 		log.Error(err, "couldn't create user data secret", "name", config.Name)
@@ -321,10 +320,13 @@ func (r *AgentBootstrapConfigReconciler) ensureInfraEnv(
 	infraEnv := assistedinstaller.GetInfraEnvFromConfig(infraEnvName, config, clusterDeployment)
 	_ = controllerutil.SetOwnerReference(config, infraEnv, r.Scheme)
 	err = r.Create(ctx, infraEnv)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+	if err == nil {
+		log.V(logutil.DebugLevel).Info("Created infra env", "name", infraEnv.Name, "namespace", infraEnv.Namespace)
 	}
-	log.V(logutil.DebugLevel).Info("Created infra env", "name", infraEnv.Name, "namespace", infraEnv.Namespace)
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		log.V(logutil.DebugLevel).Error(err, "infra env error", "name", infraEnv.Name, "namespace", infraEnv.Namespace)
+		// something went wrong, let's not exist because we might be able to read it and reference it in the status
+	}
 
 	// Set infraEnv if not already set
 	if config.Status.InfraEnvRef == nil {
@@ -407,7 +409,7 @@ func (r *AgentBootstrapConfigReconciler) setMetal3MachineImage(
 		Name:      machine.Spec.InfrastructureRef.Name,
 		Namespace: machine.Spec.InfrastructureRef.Namespace,
 	}
-	log.WithValues(
+	log = log.WithValues(
 		"AgentBootstrapConfig Name",
 		config.Name,
 		"AgentBootstrapConfig Namespace",
@@ -458,7 +460,7 @@ func (r *AgentBootstrapConfigReconciler) getInfrastructureRefKey(
 	machine *clusterv1.Machine,
 ) (types.NamespacedName, error) {
 	acp := controlplanev1alpha1.AgentControlPlane{}
-	namespace := acp.Namespace
+	namespace := machine.Namespace
 	err := util.GetTypedOwner(ctx, r.Client, machine, &acp)
 	if err != nil {
 		// Machine is not owned by ACP, check for MS

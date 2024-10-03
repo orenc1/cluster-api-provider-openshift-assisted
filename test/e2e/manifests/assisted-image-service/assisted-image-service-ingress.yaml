@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  namespace: assisted-installer
+  name: assisted-image-service
+  annotations:
+    cert-manager.io/issuer: assisted-installer-ca
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+spec:
+  rules:
+  - host: assisted-image-service-assisted-installer.apps.dev.redhat.com
+    http:
+      paths:
+      - pathType: Prefix
+        path: /
+        backend:
+          service:
+            name: assisted-image-service
+            port:
+              number: 8080
+  tls:
+  - hosts:
+    - assisted-image-service-assisted-installer.apps.dev.redhat.com
+    secretName: assisted-image-service-ingress-certificate

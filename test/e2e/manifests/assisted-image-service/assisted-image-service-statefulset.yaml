@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: assisted-image-service
+  namespace: assisted-installer
+spec:
+  podManagementPolicy: Parallel
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: assisted-image-service
+  serviceName: ""
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: assisted-image-service
+      name: assisted-image-service
+    spec:
+      containers:
+      - env:
+        - name: LISTEN_PORT
+          value: "8080"
+        - name: HTTP_LISTEN_PORT
+          value: "8081"
+        - name: RHCOS_VERSIONS
+          value: '[{"openshift_version":"4.11","cpu_architecture":"x86_64","url":"https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/4.11/4.11.48/rhcos-4.11.48-x86_64-live.x86_64.iso","version":"411.86.202308081056-0"}]'
+        - name: HTTPS_CERT_FILE
+          value: /etc/image-service/certs/tls.crt
+        - name: HTTPS_KEY_FILE
+          value: /etc/image-service/certs/tls.key
+        - name: ASSISTED_SERVICE_API_TRUSTED_CA_FILE
+          value: /etc/image-service/ca-bundle/ca.crt
+        - name: ASSISTED_SERVICE_SCHEME
+          value: https
+        - name: ASSISTED_SERVICE_HOST
+          value: assisted-service.assisted-installer.svc:8090
+        - name: IMAGE_SERVICE_BASE_URL
+          value: http://assisted-image-service:8080
+        - name: INSECURE_SKIP_VERIFY
+          value: "false"
+        - name: DATA_DIR
+          value: /data
+        image: quay.io/edge-infrastructure/assisted-image-service@sha256:dd4840bace02c3d0d8f7ae4f9075328e406bc647a5aa2b6832a153f8adab053d
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /live
+            port: 8080
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: assisted-image-service
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        - containerPort: 8081
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: 8080
+            scheme: HTTPS
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 400Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        volumeMounts:
+        - mountPath: /etc/image-service/certs
+          name: tls-certs
+        - mountPath: /etc/image-service/ca-bundle
+          name: service-cabundle
+        - mountPath: /data
+          name: image-service-data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      serviceAccount: assisted-image-service
+      serviceAccountName: assisted-image-service
+      terminationGracePeriodSeconds: 30
+      tolerations:
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready
+        operator: Exists
+        tolerationSeconds: 300
+      - effect: NoExecute
+        key: node.kubernetes.io/unreachable
+        operator: Exists
+        tolerationSeconds: 300
+      - effect: NoSchedule
+        key: node.kubernetes.io/memory-pressure
+        operator: Exists
+      volumes:
+      - name: tls-certs
+        secret:
+          defaultMode: 420
+          secretName: assisted-image-service
+      - secret:
+          defaultMode: 420
+          secretName: assisted-service
+        name: service-cabundle
+      - name: image-service-data
+        emptyDir: {}
+

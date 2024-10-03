@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: assisted-installer
+  name: assisted-image-service
+spec:
+  issuerRef:
+    name: assisted-installer-ca
+  dnsNames:
+  - assisted-image-service.assisted-installer.svc
+  - assisted-image-service.assisted-installer.svc.cluster.local
+  secretName: assisted-image-service

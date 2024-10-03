@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  namespace: assisted-installer
+  name: agentinstalladmission
+spec:
+  issuerRef:
+    name: assisted-installer-ca
+  dnsNames:
+  - agentinstalladmission.assisted-installer.svc
+  - agentinstalladmission.assisted-installer.svc.cluster.local
+  secretName: agentinstalladmission
