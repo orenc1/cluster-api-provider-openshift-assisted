@@ -17,6 +17,7 @@
     kind_cluster_name: capi-baremetal-provider
     ssh_authorized_key: "{{ lookup('ansible.builtin.env', 'SSH_AUTHORIZED_KEY') }}"
     pullsecret: "{{ lookup('ansible.builtin.env', 'PULLSECRET') }}"
+    container_tag: "{{ lookup('ansible.builtin.env', 'CONTAINER_TAG', default='local')}}"
   tasks:
   - name: Distribution
     debug: msg="{{ ansible_distribution }}"
@@ -96,10 +97,10 @@
     shell: 'export INTERNAL_IP=$(cat /tmp/internal-ip) && cat {{ src_dir }}/test/kind.yaml | sed "s/<DEVICE_IP>/${INTERNAL_IP}/g" > /tmp/kind_with_ip.yaml && kind create cluster --name {{ kind_cluster_name }} --config /tmp/kind_with_ip.yaml'
 
   - name: build images
-    shell: "export CONTAINER_TAG=local && cd {{ src_dir }} && setsid make docker-build-all"
+    shell: "export CONTAINER_TAG={{ container_tag }} && cd {{ src_dir }} && setsid make docker-build-all"
 
   - name: load images into kind
-    shell: "podman save quay.io/edge-infrastructure/openshift-capi-agent-{{ item }}:local > {{ item }}.tar.gz && kind load image-archive --name {{ kind_cluster_name }} {{ item }}.tar.gz"
+    shell: "podman save quay.io/edge-infrastructure/openshift-capi-agent-{{ item }}:{{ container_tag }} > {{ item }}.tar.gz && kind load image-archive --name {{ kind_cluster_name }} {{ item }}.tar.gz"
     loop:
       - controlplane
       - bootstrap
