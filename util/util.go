@@ -111,6 +111,19 @@ func getK8sVersionFromImageStream(is imageapi.ImageStream) (string, error) {
 	return "", fmt.Errorf("unable to find kubernetes version")
 }
 
+func GetClusterKubeconfigSecret(
+	ctx context.Context,
+	client client.Client,
+	clusterName, namespace string,
+) (*corev1.Secret, error) {
+	secretName := fmt.Sprintf("%s-kubeconfig", clusterName)
+	kubeconfigSecret := &corev1.Secret{}
+	if err := client.Get(ctx, types.NamespacedName{Name: secretName, Namespace: namespace}, kubeconfigSecret); err != nil {
+		return nil, err
+	}
+	return kubeconfigSecret, nil
+}
+
 // ExtractKubeconfigFromSecret takes a kubernetes secret and returns the kubeconfig
 func ExtractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret) ([]byte, error) {
 	kubeconfig, ok := kubeconfigSecret.Data["kubeconfig"]
