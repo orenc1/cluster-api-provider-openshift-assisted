@@ -213,7 +213,7 @@ type OpenshiftAssistedControlPlaneStatus struct {
 // +kubebuilder:printcolumn:name="Updated",type=integer,JSONPath=".status.updatedReplicas",description="Total number of non-terminated machines targeted by this control plane that have the desired template spec"
 // +kubebuilder:printcolumn:name="Unavailable",type=integer,JSONPath=".status.unavailableReplicas",description="Total number of unavailable machines targeted by this control plane"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time duration since creation of KubeadmControlPlane"
-// +kubebuilder:printcolumn:name="DistributionVersion",type=string,JSONPath=".spec.distributionVersion",description="OpenShift version associated with this control plane"
+// +kubebuilder:printcolumn:name="Distribution Version",type=string,JSONPath=".spec.distributionVersion",description="OpenShift version associated with this control plane"
 
 // OpenshiftAssistedControlPlane is the Schema for the openshiftassistedcontrolplane API
 type OpenshiftAssistedControlPlane struct {

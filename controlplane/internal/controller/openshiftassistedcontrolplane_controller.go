@@ -110,6 +110,15 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 
 	// Attempt to Patch the OpenshiftAssistedControlPlane object and status after each reconciliation if no error occurs.
 	defer func() {
+		conditions.SetSummary(oacp,
+			conditions.WithConditions(
+				clusterv1.MachinesReadyCondition,
+				controlplanev1alpha2.KubeconfigAvailableCondition,
+				controlplanev1alpha2.ControlPlaneReadyCondition,
+				controlplanev1alpha2.MachinesCreatedCondition,
+			),
+		)
+
 		// Patch ObservedGeneration only if the reconciliation completed successfully
 		patchOpts := []patch.Option{}
 		if rerr == nil {
@@ -171,11 +180,24 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	}
 	releaseImage := getReleaseImage(*oacp)
 	k8sVersion, err := r.OpenShiftVersion.GetK8sVersionFromReleaseImage(ctx, releaseImage, oacp)
-	if err != nil {
-		log.Error(err, "failed to get k8s version from release image")
-	}
+	markKubernetesVersionCondition(oacp, err)
 	oacp.Status.Version = k8sVersion
 	return ctrl.Result{}, r.reconcileReplicas(ctx, oacp, cluster)
+}
+
+func markKubernetesVersionCondition(oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane, err error) {
+	if err != nil {
+		conditions.MarkFalse(
+			oacp,
+			controlplanev1alpha2.KubernetesVersionAvailableCondition,
+			controlplanev1alpha2.KubernetesVersionUnavailableFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"failed to get k8s version from release image: %v",
+			err,
+		)
+	} else {
+		conditions.MarkTrue(oacp, controlplanev1alpha2.KubernetesVersionAvailableCondition)
+	}
 }
 
 // Ensures dependencies are deleted before allowing the OpenshiftAssistedControlPlane to be deleted
@@ -382,6 +404,17 @@ func updateReplicaStatus(acp *controlplanev1alpha2.OpenshiftAssistedControlPlane
 	acp.Status.UpdatedReplicas = int32(updatedMachines)
 	acp.Status.UnavailableReplicas = desiredReplicas - int32(readyMachines)
 	acp.Status.ReadyReplicas = int32(readyMachines)
+	if acp.Status.ReadyReplicas == desiredReplicas {
+		conditions.MarkTrue(acp, controlplanev1alpha2.MachinesCreatedCondition)
+	}
+
+	// Aggregate the operational state of all the machines; while aggregating we are adding the
+	// source ref (reason@machine/name) so the problem can be easily tracked down to its source machine.
+	conditions.SetAggregate(acp,
+		clusterv1.MachinesReadyCondition,
+		machines.ConditionGetters(),
+		conditions.AddSourceRef(),
+		conditions.WithStepCounterIf(false))
 }
 
 func (r *OpenshiftAssistedControlPlaneReconciler) generateMachine(ctx context.Context, acp *controlplanev1alpha2.OpenshiftAssistedControlPlane, name, clusterName string) (*clusterv1.Machine, error) {

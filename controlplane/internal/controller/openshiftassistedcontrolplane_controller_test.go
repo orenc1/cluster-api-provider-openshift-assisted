@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"sigs.k8s.io/cluster-api/util/conditions"
 
@@ -146,6 +147,10 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
 					},
 				)
+				// Simulate AgentClusterInstall marking KubeconfigAvailableCondition and ControlPlaneReadyCondition
+				conditions.MarkTrue(openshiftAssistedControlPlane, controlplanev1alpha2.KubeconfigAvailableCondition)
+				conditions.MarkTrue(openshiftAssistedControlPlane, controlplanev1alpha2.ControlPlaneReadyCondition)
+
 				Expect(k8sClient.Create(ctx, openshiftAssistedControlPlane)).To(Succeed())
 
 				By("checking if the OpenshiftAssistedControlPlane created the cluster deployment after reconcile")
@@ -157,6 +162,14 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(openshiftAssistedControlPlane.Status.ClusterDeploymentRef).NotTo(BeNil())
 				Expect(openshiftAssistedControlPlane.Status.ClusterDeploymentRef.Name).Should(Equal(openshiftAssistedControlPlane.Name))
+				By("checking conditions ready")
+				expectedReadyConditions := []clusterv1.ConditionType{
+					//controlplanev1alpha2.ControlPlaneReadyCondition,
+					controlplanev1alpha2.MachinesCreatedCondition,
+					controlplanev1alpha2.KubeconfigAvailableCondition,
+					controlplanev1alpha2.KubernetesVersionAvailableCondition,
+				}
+				checkReadyConditions(expectedReadyConditions, openshiftAssistedControlPlane)
 
 				By("checking that the cluster deployment was created")
 				cd := &hivev1.ClusterDeployment{}
@@ -259,6 +272,17 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		})
 	})
 })
+
+func checkReadyConditions(expectedReadyConditions []clusterv1.ConditionType, openshiftAssistedControlPlane *controlplanev1alpha2.OpenshiftAssistedControlPlane) {
+	for _, conditionType := range expectedReadyConditions {
+		By(fmt.Sprintf("checking condition %s ready", conditionType))
+		condition := conditions.Get(openshiftAssistedControlPlane,
+			conditionType,
+		)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(corev1.ConditionTrue))
+	}
+}
 
 func getOpenshiftAssistedControlPlane() *controlplanev1alpha2.OpenshiftAssistedControlPlane {
 	return &controlplanev1alpha2.OpenshiftAssistedControlPlane{

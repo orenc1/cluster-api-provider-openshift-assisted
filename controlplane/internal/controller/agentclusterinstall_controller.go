@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 
+	"sigs.k8s.io/cluster-api/util/conditions"
+
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
@@ -75,12 +77,18 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 	// Check if AgentClusterInstall has moved to day 2 aka control plane is installed
 	if isInstalled(aci) {
 		acp.Status.Ready = true
-		if err := r.Client.Status().Update(ctx, &acp); err != nil {
-			log.Error(err, "failed setting OpenshiftAssistedControlPlane to ready")
-			return ctrl.Result{}, err
-		}
+		conditions.MarkTrue(&acp, controlplanev1alpha2.ControlPlaneReadyCondition)
+		return ctrl.Result{}, r.updateControlplaneStatus(ctx, &acp)
 	}
-	return ctrl.Result{}, nil
+	conditions.MarkFalse(
+		&acp,
+		controlplanev1alpha2.ControlPlaneReadyCondition,
+		controlplanev1alpha2.ControlPlaneInstallingReason,
+		clusterv1.ConditionSeverityInfo,
+		"Controlplane installing, status: %s",
+		aci.Status.DebugInfo.State,
+	)
+	return ctrl.Result{}, r.updateControlplaneStatus(ctx, &acp)
 }
 
 func (r *AgentClusterInstallReconciler) reconcile(
@@ -89,11 +97,25 @@ func (r *AgentClusterInstallReconciler) reconcile(
 	acp *controlplanev1alpha2.OpenshiftAssistedControlPlane,
 ) error {
 	if !hasKubeconfigRef(aci) {
+		conditions.MarkFalse(
+			acp,
+			controlplanev1alpha2.KubeconfigAvailableCondition,
+			controlplanev1alpha2.KubeconfigUnavailableFailedReason,
+			clusterv1.ConditionSeverityInfo,
+			"Kubeconfig not available",
+		)
 		return nil
 	}
 
 	kubeconfigSecret, err := r.getACIKubeconfig(ctx, aci, *acp)
 	if err != nil {
+		conditions.MarkFalse(
+			acp,
+			controlplanev1alpha2.KubeconfigAvailableCondition,
+			controlplanev1alpha2.KubeconfigUnavailableFailedReason,
+			clusterv1.ConditionSeverityInfo,
+			"error retrieving Kubeconfig %v", err,
+		)
 		return err
 	}
 
@@ -103,14 +125,29 @@ func (r *AgentClusterInstallReconciler) reconcile(
 	}
 
 	if err := r.updateLabels(ctx, kubeconfigSecret, labels); err != nil {
+		conditions.MarkFalse(
+			acp,
+			controlplanev1alpha2.KubeconfigAvailableCondition,
+			controlplanev1alpha2.KubeconfigUnavailableFailedReason,
+			clusterv1.ConditionSeverityInfo,
+			"error updating Kubeconfig secret labels %v", err,
+		)
 		return err
 	}
 
 	if !r.ClusterKubeconfigSecretExists(ctx, clusterName, acp.Namespace) {
 		if err := r.createKubeconfig(ctx, kubeconfigSecret, clusterName, *acp); err != nil {
+			conditions.MarkFalse(
+				acp,
+				controlplanev1alpha2.KubeconfigAvailableCondition,
+				controlplanev1alpha2.KubeconfigUnavailableFailedReason,
+				clusterv1.ConditionSeverityInfo,
+				"error creating Kubeconfig secret: %v", err,
+			)
 			return err
 		}
 	}
+	conditions.MarkTrue(acp, controlplanev1alpha2.KubeconfigAvailableCondition)
 
 	acp.Status.Initialized = true
 	if err := r.Client.Status().Update(ctx, acp); err != nil {
@@ -199,6 +236,13 @@ func (r *AgentClusterInstallReconciler) ClusterKubeconfigSecretExists(
 		return !apierrors.IsNotFound(err)
 	}
 	return true
+}
+
+func (r *AgentClusterInstallReconciler) updateControlplaneStatus(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	if err := r.Client.Status().Update(ctx, oacp); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GenerateSecretWithOwner returns a Kubernetes secret for the given Cluster name, namespace, kubeconfig data, and ownerReference.
