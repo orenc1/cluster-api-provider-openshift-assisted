@@ -8,7 +8,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func GetWorkloadClusterClient(kubeconfig []byte) (client.Client, error) {
+type WorkloadClusterClientGenerator struct{}
+
+type ClientGenerator interface {
+	GetWorkloadClusterClient(kubeconfig []byte) (client.Client, error)
+}
+
+func NewWorkloadClusterClientGenerator() *WorkloadClusterClientGenerator {
+	return &WorkloadClusterClientGenerator{}
+}
+
+func (w *WorkloadClusterClientGenerator) GetWorkloadClusterClient(kubeconfig []byte) (client.Client, error) {
 	clientConfig, err := clientcmd.NewClientConfigFromBytes(kubeconfig)
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get clientconfig from kubeconfig data")

@@ -134,7 +134,8 @@ func ExtractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret, dataKey string
 }
 
 // FindStatusCondition takes a set of conditions and a condition to find and returns it if it exists
-func FindStatusCondition(conditions clusterv1.Conditions, conditionToFind clusterv1.ConditionType) *clusterv1.Condition {
+func FindStatusCondition(conditions clusterv1.Conditions,
+	conditionToFind clusterv1.ConditionType) *clusterv1.Condition {
 	for _, condition := range conditions {
 		if condition.Type == conditionToFind {
 			return &condition

@@ -67,8 +67,9 @@ const (
 // OpenshiftAssistedControlPlaneReconciler reconciles a OpenshiftAssistedControlPlane object
 type OpenshiftAssistedControlPlaneReconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
-	OpenShiftVersion version.Versioner
+	Scheme                         *runtime.Scheme
+	OpenShiftVersion               version.Versioner
+	WorkloadClusterClientGenerator workloadclient.ClientGenerator
 }
 
 var minVersion = semver.New(minOpenShiftVersion)
@@ -191,6 +192,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 
 	if isUpgradeRequested(ctx, oacp) {
 		//TODO: Handle upgrade request
+		log.Info("upgrade for control plane has been requested")
 	}
 	return ctrl.Result{}, r.reconcileReplicas(ctx, oacp, cluster)
 }
@@ -531,7 +533,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensurePullSecret(
 
 func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClusterVersion(ctx context.Context,
 	oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (string, error) {
-	workloadClient, err := getWorkloadClient(ctx, r.Client, oacp)
+	workloadClient, err := r.getWorkloadClient(ctx, oacp)
 	if err != nil {
 		return "", err
 	}
@@ -545,12 +547,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClusterVersion(ctx 
 	return clusterVersion.Status.Desired.Version, nil
 }
 
-func getWorkloadClient(ctx context.Context, client client.Client, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (client.Client, error) {
+func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClient(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (client.Client, error) {
 	if !isKubeconfigAvailable(oacp) {
 		return nil, fmt.Errorf("kubeconfig for workload cluster is not available yet")
 	}
 
-	kubeconfigSecret, err := util.GetClusterKubeconfigSecret(ctx, client, oacp.Labels[clusterv1.ClusterNameLabel], oacp.Namespace)
+	kubeconfigSecret, err := util.GetClusterKubeconfigSecret(ctx, r.Client, oacp.Labels[clusterv1.ClusterNameLabel], oacp.Namespace)
 	if err != nil {
 		err = errors.Join(err, fmt.Errorf("failed to get cluster kubeconfig secret"))
 		return nil, err
@@ -566,7 +568,7 @@ func getWorkloadClient(ctx context.Context, client client.Client, oacp *controlp
 		return nil, err
 	}
 
-	workloadClient, err := workloadclient.GetWorkloadClusterClient(kubeconfig)
+	workloadClient, err := r.WorkloadClusterClientGenerator.GetWorkloadClusterClient(kubeconfig)
 	if err != nil {
 		err = errors.Join(err, fmt.Errorf("failed to establish client for workload cluster from kubeconfig"))
 		return nil, err

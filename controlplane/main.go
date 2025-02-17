@@ -22,6 +22,7 @@ import (
 	"os"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
 
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
@@ -133,9 +134,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err = (&controlplanecontroller.OpenshiftAssistedControlPlaneReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		OpenShiftVersion: version.NewOpenShiftVersion(mgr.GetClient()),
+		Client:                         mgr.GetClient(),
+		Scheme:                         mgr.GetScheme(),
+		OpenShiftVersion:               version.NewOpenShiftVersion(mgr.GetClient()),
+		WorkloadClusterClientGenerator: workloadclient.NewWorkloadClusterClientGenerator(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OpenshiftAssistedControlPlane")
 		os.Exit(1)

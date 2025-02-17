@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
+	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -54,6 +55,7 @@ var _ = BeforeSuite(func() {
 
 	utilruntime.Must(controlplanev1alpha1.AddToScheme(testScheme))
 	utilruntime.Must(corev1.AddToScheme(testScheme))
+	utilruntime.Must(configv1.AddToScheme(testScheme))
 	utilruntime.Must(clusterv1.AddToScheme(testScheme))
 	utilruntime.Must(hivev1.AddToScheme(testScheme))
 	utilruntime.Must(hiveext.AddToScheme(testScheme))
