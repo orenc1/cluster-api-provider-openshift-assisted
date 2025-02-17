@@ -560,7 +560,7 @@ func getWorkloadClient(ctx context.Context, client client.Client, oacp *controlp
 		return nil, fmt.Errorf("kubeconfig secret was not found")
 	}
 
-	kubeconfig, err := util.ExtractKubeconfigFromSecret(kubeconfigSecret)
+	kubeconfig, err := util.ExtractKubeconfigFromSecret(kubeconfigSecret, "value")
 	if err != nil {
 		err = errors.Join(err, fmt.Errorf("failed to extract kubeconfig from secret %s", kubeconfigSecret.Name))
 		return nil, err

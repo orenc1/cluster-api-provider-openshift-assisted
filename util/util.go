@@ -125,8 +125,8 @@ func GetClusterKubeconfigSecret(
 }
 
 // ExtractKubeconfigFromSecret takes a kubernetes secret and returns the kubeconfig
-func ExtractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret) ([]byte, error) {
-	kubeconfig, ok := kubeconfigSecret.Data["kubeconfig"]
+func ExtractKubeconfigFromSecret(kubeconfigSecret *corev1.Secret, dataKey string) ([]byte, error) {
+	kubeconfig, ok := kubeconfigSecret.Data[dataKey]
 	if !ok {
 		return nil, errors.New("kubeconfig not found in secret")
 	}
