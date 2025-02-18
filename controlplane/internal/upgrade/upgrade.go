@@ -20,6 +20,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	// UpgradeImageOverrideAnnotation is a (temporary) solution to provide an upgrade image to CVO
+	// It is used while the OCP version being used for testing is not GA and should not be necessary if
+	// a GA version of OCP is used.
+	// Example: GA version = 4.19.0, Non-GA = 4.19.0-0.nightly-2025-01-30-091858
+	UpgradeImageOverrideAnnotation = "cluster.x-k8s.io/upgrade-image-override"
+)
+
 func IsUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
 	log := ctrl.LoggerFrom(ctx)
 	oacpDistVersion, err := semver.NewVersion(oacp.Spec.DistributionVersion)
@@ -102,4 +110,34 @@ func isKubeconfigAvailable(oacp *controlplanev1alpha2.OpenshiftAssistedControlPl
 		return false
 	}
 	return kubeconfigFoundCondition.Status == corev1.ConditionTrue
+}
+
+func UpgradeWorkloadCluster(ctx context.Context, client client.Client,
+	workloadClusterClientGenerator workloadclient.ClientGenerator,
+	oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) error {
+	workloadClient, err := getWorkloadClient(ctx, client, workloadClusterClientGenerator, oacp)
+	if err != nil {
+		return err
+	}
+
+	if workloadClient == nil {
+		return fmt.Errorf("workload client is not available yet")
+	}
+
+	var clusterVersion configv1.ClusterVersion
+	if err := workloadClient.Get(ctx, types.NamespacedName{Name: "version"}, &clusterVersion); err != nil {
+		err = errors.Join(err, fmt.Errorf(("failed to get ClusterVersion from workload cluster")))
+		return err
+	}
+
+	clusterVersion.Spec.DesiredUpdate = &configv1.Update{
+		Version: oacp.Spec.DistributionVersion,
+	}
+
+	if releaseImage, ok := oacp.Annotations[UpgradeImageOverrideAnnotation]; ok {
+		clusterVersion.Spec.DesiredUpdate.Image = releaseImage
+		clusterVersion.Spec.DesiredUpdate.Force = true
+	}
+
+	return workloadClient.Update(ctx, &clusterVersion)
 }
