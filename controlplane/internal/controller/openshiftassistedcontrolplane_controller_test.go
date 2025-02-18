@@ -333,7 +333,8 @@ var _ = Describe("Upgrade", func() {
 				)
 
 				By("confirming an error is returned when calling getWorkloadClusterVersion")
-				_, err := controllerReconciler.getWorkloadClusterVersion(ctx, openshiftAssistedControlPlane)
+				_, err := GetWorkloadClusterVersion(ctx, controllerReconciler.Client,
+					controllerReconciler.WorkloadClusterClientGenerator, openshiftAssistedControlPlane)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal("kubeconfig for workload cluster is not available yet"))
 			})
@@ -361,31 +362,32 @@ var _ = Describe("Upgrade", func() {
 				By("creating a cluster version using the workload cluster's client")
 				mockWorkloadClientGenerator.MockCreateClusterVersion(openshiftAssistedControlPlane.Spec.DistributionVersion)
 				By("checking the cluster version returned")
-				distributionVersion, err := controllerReconciler.getWorkloadClusterVersion(ctx, openshiftAssistedControlPlane)
+				distributionVersion, err := GetWorkloadClusterVersion(ctx, controllerReconciler.Client,
+					controllerReconciler.WorkloadClusterClientGenerator, openshiftAssistedControlPlane)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(distributionVersion).To(Equal(openshiftAssistedControlPlane.Spec.DistributionVersion))
 			})
 		})
 	})
-	Context("isUpgradeRequested", func() {
+	Context("IsUpgradeRequested", func() {
 		When("openshiftassistedcontrolplane doesn't have the distributionVersion status set", func() {
 			It("returns false", func() {
 				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				Expect(isUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
+				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
 			})
 		})
 		When("openshiftassistedcontrolplane's requested upgrade is less than the current workload cluster's version", func() {
 			It("returns false", func() {
 				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
 				openshiftAssistedControlPlane.Status.DistributionVersion = "4.18.0"
-				Expect(isUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
+				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
 			})
 		})
 		When("openshiftassistedcontrolplane's requested upgrade is greater than the current workload cluster's version", func() {
 			It("returns true", func() {
 				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
 				openshiftAssistedControlPlane.Status.DistributionVersion = "4.11.0"
-				Expect(isUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeTrue())
+				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeTrue())
 			})
 		})
 	})
@@ -427,7 +429,6 @@ func NewMockWorkloadClient() *mockWorkloadClient {
 }
 
 func (m *mockWorkloadClient) GetWorkloadClusterClient(kubeconfig []byte) (client.Client, error) {
-
 	return m.mockClient, nil
 }
 

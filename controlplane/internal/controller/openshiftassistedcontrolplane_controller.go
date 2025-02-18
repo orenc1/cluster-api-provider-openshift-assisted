@@ -186,11 +186,11 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	k8sVersion, err := r.OpenShiftVersion.GetK8sVersionFromReleaseImage(ctx, releaseImage, oacp)
 	markKubernetesVersionCondition(oacp, err)
 	oacp.Status.Version = k8sVersion
-	if oacp.Status.DistributionVersion, err = r.getWorkloadClusterVersion(ctx, oacp); err != nil {
+	if oacp.Status.DistributionVersion, err = GetWorkloadClusterVersion(ctx, r.Client, r.WorkloadClusterClientGenerator, oacp); err != nil {
 		log.Error(err, "failed to set the openshift version in the control plane status")
 	}
 
-	if isUpgradeRequested(ctx, oacp) {
+	if IsUpgradeRequested(ctx, oacp) {
 		//TODO: Handle upgrade request
 		log.Info("upgrade for control plane has been requested")
 	}
@@ -212,7 +212,7 @@ func markKubernetesVersionCondition(oacp *controlplanev1alpha2.OpenshiftAssisted
 	}
 }
 
-func isUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
+func IsUpgradeRequested(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) bool {
 	log := ctrl.LoggerFrom(ctx)
 	oacpDistVersion, err := semver.NewVersion(oacp.Spec.DistributionVersion)
 	if err != nil {
@@ -531,9 +531,10 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensurePullSecret(
 	return nil
 }
 
-func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClusterVersion(ctx context.Context,
+func GetWorkloadClusterVersion(ctx context.Context, client client.Client,
+	workloadClusterClientGenerator workloadclient.ClientGenerator,
 	oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (string, error) {
-	workloadClient, err := r.getWorkloadClient(ctx, oacp)
+	workloadClient, err := getWorkloadClient(ctx, client, workloadClusterClientGenerator, oacp)
 	if err != nil {
 		return "", err
 	}
@@ -547,12 +548,14 @@ func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClusterVersion(ctx 
 	return clusterVersion.Status.Desired.Version, nil
 }
 
-func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClient(ctx context.Context, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (client.Client, error) {
+func getWorkloadClient(ctx context.Context, client client.Client,
+	workloadClusterClientGenerator workloadclient.ClientGenerator,
+	oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane) (client.Client, error) {
 	if !isKubeconfigAvailable(oacp) {
 		return nil, fmt.Errorf("kubeconfig for workload cluster is not available yet")
 	}
 
-	kubeconfigSecret, err := util.GetClusterKubeconfigSecret(ctx, r.Client, oacp.Labels[clusterv1.ClusterNameLabel], oacp.Namespace)
+	kubeconfigSecret, err := util.GetClusterKubeconfigSecret(ctx, client, oacp.Labels[clusterv1.ClusterNameLabel], oacp.Namespace)
 	if err != nil {
 		err = errors.Join(err, fmt.Errorf("failed to get cluster kubeconfig secret"))
 		return nil, err
@@ -568,7 +571,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) getWorkloadClient(ctx context.
 		return nil, err
 	}
 
-	workloadClient, err := r.WorkloadClusterClientGenerator.GetWorkloadClusterClient(kubeconfig)
+	workloadClient, err := workloadClusterClientGenerator.GetWorkloadClusterClient(kubeconfig)
 	if err != nil {
 		err = errors.Join(err, fmt.Errorf("failed to establish client for workload cluster from kubeconfig"))
 		return nil, err
