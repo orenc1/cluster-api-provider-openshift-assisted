@@ -34,7 +34,6 @@ import (
 
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
-	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -101,7 +100,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 			It("should successfully create a cluster deployment", func() {
 				By("setting the cluster as the owner ref on the OACP")
 
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
 						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -137,7 +136,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 			It("should successfully create a cluster deployment and match OpenshiftAssistedControlPlane properties", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
 
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.Spec.Config.ClusterName = "my-cluster"
 				openshiftAssistedControlPlane.Spec.Config.PullSecretRef = &corev1.LocalObjectReference{
 					Name: "my-pullsecret",
@@ -188,7 +187,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		When("a pull secret isn't set on the OpenshiftAssistedControlPlane", func() {
 			It("should successfully create the ClusterDeployment with the default fake pull secret", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
 						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -227,7 +226,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		It("should add a finalizer to the OpenshiftAssistedControlPlane if it's not being deleted", func() {
 			By("setting the owner ref on the OpenshiftAssistedControlPlane")
 
-			openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+			openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 			openshiftAssistedControlPlane.SetOwnerReferences(
 				[]metav1.OwnerReference{
 					*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -247,7 +246,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		When("an invalid version is set on the OpenshiftAssistedControlPlane", func() {
 			It("should return error", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.Spec.DistributionVersion = "4.12.0"
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
@@ -274,125 +273,6 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 	})
 })
 
-var _ = Describe("Upgrade", func() {
-	Context("distributionVersion returned", func() {
-		const (
-			openshiftAssistedControlPlaneName = "test-resource"
-			clusterName                       = "test-cluster"
-			namespace                         = "test"
-		)
-		var (
-			ctx                         = context.Background()
-			cluster                     *clusterv1.Cluster
-			controllerReconciler        *OpenshiftAssistedControlPlaneReconciler
-			mockCtrl                    *gomock.Controller
-			k8sClient                   client.Client
-			mockWorkloadClientGenerator *mockWorkloadClient
-		)
-		BeforeEach(func() {
-			k8sClient = fakeclient.NewClientBuilder().
-				WithScheme(testScheme).
-				WithStatusSubresource(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}).Build()
-
-			mockCtrl = gomock.NewController(GinkgoT())
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
-			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
-
-			mockWorkloadClientGenerator = NewMockWorkloadClient()
-			controllerReconciler = &OpenshiftAssistedControlPlaneReconciler{
-				Client:                         k8sClient,
-				Scheme:                         k8sClient.Scheme(),
-				OpenShiftVersion:               &mockOpenShiftVersioner{},
-				WorkloadClusterClientGenerator: mockWorkloadClientGenerator,
-			}
-
-			By("creating a cluster")
-			cluster = &clusterv1.Cluster{}
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)
-			if err != nil && errors.IsNotFound(err) {
-				cluster = testutils.NewCluster(clusterName, namespace)
-				err := k8sClient.Create(ctx, cluster)
-				Expect(err).NotTo(HaveOccurred())
-			}
-		})
-
-		AfterEach(func() {
-			mockCtrl.Finish()
-			k8sClient = nil
-		})
-		When("the kubeconfig secret is not yet available for the workload cluster", func() {
-			It("should return an error and the distribution version should be empty", func() {
-				By("creating the openshiftassistedcontrolplane with condition kubeconfig available set to false")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				conditions.MarkFalse(
-					openshiftAssistedControlPlane,
-					controlplanev1alpha2.KubeconfigAvailableCondition,
-					controlplanev1alpha2.KubeconfigUnavailableFailedReason,
-					clusterv1.ConditionSeverityInfo,
-					"error retrieving Kubeconfig %v", fmt.Errorf("secret does not exist"),
-				)
-
-				By("confirming an error is returned when calling getWorkloadClusterVersion")
-				_, err := GetWorkloadClusterVersion(ctx, controllerReconciler.Client,
-					controllerReconciler.WorkloadClusterClientGenerator, openshiftAssistedControlPlane)
-				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(Equal("kubeconfig for workload cluster is not available yet"))
-			})
-		})
-
-		When("the kubeconfig secret is available", func() {
-			It("should return the openshiftassistedcontrolplane's distributionversion", func() {
-				By("creating the openshiftassistedcontrolplane with condition kubeconfig available set to true")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				openshiftAssistedControlPlane.Labels = map[string]string{
-					clusterv1.ClusterNameLabel: cluster.Name,
-				}
-				conditions.MarkTrue(openshiftAssistedControlPlane, controlplanev1alpha2.KubeconfigAvailableCondition)
-				By("creating the kubeconfig secret")
-				kubeconfigSecret := &corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      fmt.Sprintf("%s-kubeconfig", cluster.Name),
-						Namespace: openshiftAssistedControlPlane.Namespace,
-					},
-					Data: map[string][]byte{
-						"value": []byte("kubeconfig"),
-					},
-				}
-				Expect(k8sClient.Create(ctx, kubeconfigSecret)).To(Succeed())
-				By("creating a cluster version using the workload cluster's client")
-				mockWorkloadClientGenerator.MockCreateClusterVersion(openshiftAssistedControlPlane.Spec.DistributionVersion)
-				By("checking the cluster version returned")
-				distributionVersion, err := GetWorkloadClusterVersion(ctx, controllerReconciler.Client,
-					controllerReconciler.WorkloadClusterClientGenerator, openshiftAssistedControlPlane)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(distributionVersion).To(Equal(openshiftAssistedControlPlane.Spec.DistributionVersion))
-			})
-		})
-	})
-	Context("IsUpgradeRequested", func() {
-		When("openshiftassistedcontrolplane doesn't have the distributionVersion status set", func() {
-			It("returns false", func() {
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
-			})
-		})
-		When("openshiftassistedcontrolplane's requested upgrade is less than the current workload cluster's version", func() {
-			It("returns false", func() {
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				openshiftAssistedControlPlane.Status.DistributionVersion = "4.18.0"
-				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeFalse())
-			})
-		})
-		When("openshiftassistedcontrolplane's requested upgrade is greater than the current workload cluster's version", func() {
-			It("returns true", func() {
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
-				openshiftAssistedControlPlane.Status.DistributionVersion = "4.11.0"
-				Expect(IsUpgradeRequested(context.Background(), openshiftAssistedControlPlane)).To(BeTrue())
-			})
-		})
-	})
-})
-
 func checkReadyConditions(expectedReadyConditions []clusterv1.ConditionType, openshiftAssistedControlPlane *controlplanev1alpha2.OpenshiftAssistedControlPlane) {
 	for _, conditionType := range expectedReadyConditions {
 		By(fmt.Sprintf("checking condition %s ready", conditionType))
@@ -402,46 +282,4 @@ func checkReadyConditions(expectedReadyConditions []clusterv1.ConditionType, ope
 		Expect(condition).NotTo(BeNil())
 		Expect(condition.Status).To(Equal(corev1.ConditionTrue))
 	}
-}
-
-func getOpenshiftAssistedControlPlane() *controlplanev1alpha2.OpenshiftAssistedControlPlane {
-	return &controlplanev1alpha2.OpenshiftAssistedControlPlane{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      openshiftAssistedControlPlaneName,
-			Namespace: namespace,
-		},
-		Spec: controlplanev1alpha2.OpenshiftAssistedControlPlaneSpec{
-			DistributionVersion: "4.16.0",
-		},
-	}
-}
-
-type mockWorkloadClient struct {
-	mockClient client.Client
-}
-
-func NewMockWorkloadClient() *mockWorkloadClient {
-	workloadK8sClient := fakeclient.NewClientBuilder().
-		WithScheme(testScheme).Build()
-	return &mockWorkloadClient{
-		mockClient: workloadK8sClient,
-	}
-}
-
-func (m *mockWorkloadClient) GetWorkloadClusterClient(kubeconfig []byte) (client.Client, error) {
-	return m.mockClient, nil
-}
-
-func (m *mockWorkloadClient) MockCreateClusterVersion(version string) {
-	clusterVersion := &configv1.ClusterVersion{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "version",
-		},
-		Status: configv1.ClusterVersionStatus{
-			Desired: configv1.Release{
-				Version: version,
-			},
-		},
-	}
-	Expect(m.mockClient.Create(context.Background(), clusterVersion)).To(Succeed())
 }
