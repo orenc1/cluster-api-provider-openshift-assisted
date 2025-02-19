@@ -100,7 +100,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 			It("should successfully create a cluster deployment", func() {
 				By("setting the cluster as the owner ref on the OACP")
 
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
 						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -136,7 +136,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 			It("should successfully create a cluster deployment and match OpenshiftAssistedControlPlane properties", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
 
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.Spec.Config.ClusterName = "my-cluster"
 				openshiftAssistedControlPlane.Spec.Config.PullSecretRef = &corev1.LocalObjectReference{
 					Name: "my-pullsecret",
@@ -187,7 +187,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		When("a pull secret isn't set on the OpenshiftAssistedControlPlane", func() {
 			It("should successfully create the ClusterDeployment with the default fake pull secret", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
 						*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -226,7 +226,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		It("should add a finalizer to the OpenshiftAssistedControlPlane if it's not being deleted", func() {
 			By("setting the owner ref on the OpenshiftAssistedControlPlane")
 
-			openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+			openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 			openshiftAssistedControlPlane.SetOwnerReferences(
 				[]metav1.OwnerReference{
 					*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
@@ -246,7 +246,7 @@ var _ = Describe("OpenshiftAssistedControlPlane Controller", func() {
 		When("an invalid version is set on the OpenshiftAssistedControlPlane", func() {
 			It("should return error", func() {
 				By("setting the cluster as the owner ref on the OpenshiftAssistedControlPlane")
-				openshiftAssistedControlPlane := getOpenshiftAssistedControlPlane()
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
 				openshiftAssistedControlPlane.Spec.DistributionVersion = "4.12.0"
 				openshiftAssistedControlPlane.SetOwnerReferences(
 					[]metav1.OwnerReference{
@@ -281,17 +281,5 @@ func checkReadyConditions(expectedReadyConditions []clusterv1.ConditionType, ope
 		)
 		Expect(condition).NotTo(BeNil())
 		Expect(condition.Status).To(Equal(corev1.ConditionTrue))
-	}
-}
-
-func getOpenshiftAssistedControlPlane() *controlplanev1alpha2.OpenshiftAssistedControlPlane {
-	return &controlplanev1alpha2.OpenshiftAssistedControlPlane{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      openshiftAssistedControlPlaneName,
-			Namespace: namespace,
-		},
-		Spec: controlplanev1alpha2.OpenshiftAssistedControlPlaneSpec{
-			DistributionVersion: "4.16.0",
-		},
 	}
 }

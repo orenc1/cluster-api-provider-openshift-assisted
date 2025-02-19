@@ -21,7 +21,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
@@ -64,8 +66,9 @@ const (
 // OpenshiftAssistedControlPlaneReconciler reconciles a OpenshiftAssistedControlPlane object
 type OpenshiftAssistedControlPlaneReconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
-	OpenShiftVersion version.Versioner
+	Scheme                         *runtime.Scheme
+	OpenShiftVersion               version.Versioner
+	WorkloadClusterClientGenerator workloadclient.ClientGenerator
 }
 
 var minVersion = semver.New(minOpenShiftVersion)
@@ -182,6 +185,14 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	k8sVersion, err := r.OpenShiftVersion.GetK8sVersionFromReleaseImage(ctx, releaseImage, oacp)
 	markKubernetesVersionCondition(oacp, err)
 	oacp.Status.Version = k8sVersion
+	if oacp.Status.DistributionVersion, err = upgrade.GetWorkloadClusterVersion(ctx, r.Client, r.WorkloadClusterClientGenerator, oacp); err != nil {
+		log.Error(err, "failed to set the openshift version in the control plane status")
+	}
+
+	if upgrade.IsUpgradeRequested(ctx, oacp) {
+		//TODO: Handle upgrade request
+		log.Info("upgrade for control plane has been requested")
+	}
 	return ctrl.Result{}, r.reconcileReplicas(ctx, oacp, cluster)
 }
 
