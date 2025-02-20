@@ -190,8 +190,11 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	}
 
 	if upgrade.IsUpgradeRequested(ctx, oacp) {
-		//TODO: Handle upgrade request
-		log.Info("upgrade for control plane has been requested")
+		log.Info("workload cluster upgrade has been requested, starting upgrade", "current workload cluster version", oacp.Status.DistributionVersion, "new workload cluster version", oacp.Spec.DistributionVersion)
+		if err := upgrade.UpgradeWorkloadCluster(ctx, r.Client, r.WorkloadClusterClientGenerator, oacp); err != nil {
+			log.Error(err, "failed to upgrade workload cluster")
+		}
+		log.Info("workload cluster upgrade set on ClusterVersion, waiting completion")
 	}
 	return ctrl.Result{}, r.reconcileReplicas(ctx, oacp, cluster)
 }

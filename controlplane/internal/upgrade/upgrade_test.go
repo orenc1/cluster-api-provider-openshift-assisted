@@ -160,6 +160,78 @@ var _ = Describe("Upgrade", func() {
 			})
 		})
 	})
+	Context("Upgrading", func() {
+		const (
+			openshiftAssistedControlPlaneName = "test-resource"
+			clusterName                       = "test-cluster"
+			namespace                         = "test"
+		)
+		var (
+			ctx                         = context.Background()
+			cluster                     *clusterv1.Cluster
+			mockCtrl                    *gomock.Controller
+			k8sClient                   client.Client
+			mockWorkloadClientGenerator *mockWorkloadClient
+		)
+		BeforeEach(func() {
+			k8sClient = fakeclient.NewClientBuilder().
+				WithScheme(testScheme).
+				WithStatusSubresource(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}).Build()
+
+			mockCtrl = gomock.NewController(GinkgoT())
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+			mockWorkloadClientGenerator = NewMockWorkloadClient()
+
+			By("creating a cluster")
+			cluster = &clusterv1.Cluster{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: clusterName, Namespace: namespace}, cluster)
+			if err != nil && errors.IsNotFound(err) {
+				cluster = testutils.NewCluster(clusterName, namespace)
+				err := k8sClient.Create(ctx, cluster)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		AfterEach(func() {
+			mockCtrl.Finish()
+			k8sClient = nil
+		})
+		When("Upgrade is requested", func() {
+			It("should update the workload cluster's cluster version to have the correct desired update", func() {
+				By("creating the openshift assisted control plane")
+				openshiftAssistedControlPlane := testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
+				openshiftAssistedControlPlane.Status.DistributionVersion = "4.12.0"
+				openshiftAssistedControlPlane.Labels = map[string]string{
+					clusterv1.ClusterNameLabel: cluster.Name,
+				}
+				conditions.MarkTrue(openshiftAssistedControlPlane, controlplanev1alpha2.KubeconfigAvailableCondition)
+				By("creating the kubeconfig secret")
+				kubeconfigSecret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      fmt.Sprintf("%s-kubeconfig", cluster.Name),
+						Namespace: openshiftAssistedControlPlane.Namespace,
+					},
+					Data: map[string][]byte{
+						"value": []byte("kubeconfig"),
+					},
+				}
+				Expect(k8sClient.Create(ctx, kubeconfigSecret)).To(Succeed())
+				By("creating a cluster version using the workload cluster's client")
+				mockWorkloadClientGenerator.MockCreateClusterVersion("4.12.0")
+
+				By("calling UpgradeWorkloadCluster")
+				Expect(UpgradeWorkloadCluster(ctx, k8sClient, mockWorkloadClientGenerator, openshiftAssistedControlPlane)).To(Succeed())
+
+				By("checking the workload cluster's cluster version for the desired update field")
+				workloadClusterVersion := &configv1.ClusterVersion{}
+				Expect(mockWorkloadClientGenerator.mockClient.Get(ctx, types.NamespacedName{Name: "version"}, workloadClusterVersion)).To(Succeed())
+				Expect(workloadClusterVersion.Spec.DesiredUpdate).NotTo(BeNil())
+				Expect(workloadClusterVersion.Spec.DesiredUpdate.Version).To(Equal(openshiftAssistedControlPlane.Spec.DistributionVersion))
+			})
+		})
+	})
 })
 
 type mockWorkloadClient struct {
