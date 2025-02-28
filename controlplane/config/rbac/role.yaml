@@ -40,6 +40,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - cluster.open-cluster-management.io
+  resources:
+  - managedclustersets/join
+  verbs:
+  - create
+- apiGroups:
   - cluster.x-k8s.io
   resources:
   - clusters
