@@ -21,14 +21,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
-
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
-
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	v1beta2 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
+	"github.com/openshift/assisted-service/api/v1beta1"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
-	"sigs.k8s.io/cluster-api/util/conditions"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
 
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
@@ -36,6 +35,7 @@ import (
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	ctrlruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -490,6 +490,287 @@ var _ = Describe("Upgrade scenarios", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 })
+
+var _ = Describe("Scale operations and machine updates", func() {
+	const (
+		openshiftAssistedControlPlaneName = "test-resource"
+		clusterName                       = "test-cluster"
+		namespace                         = "test"
+	)
+
+	var (
+		ctx                           context.Context
+		typeNamespacedName            types.NamespacedName
+		cluster                       *clusterv1.Cluster
+		controllerReconciler          *OpenshiftAssistedControlPlaneReconciler
+		k8sClient                     client.Client
+		ctrl                          *gomock.Controller
+		mockKubernetesVersionDetector *version.MockKubernetesVersionDetector
+		oacp                          *controlplanev1alpha2.OpenshiftAssistedControlPlane
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		ctrl = gomock.NewController(GinkgoT())
+		k8sClient = fakeclient.NewClientBuilder().
+			WithScheme(testScheme).
+			WithStatusSubresource(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}).
+			WithStatusSubresource(&clusterv1.Cluster{}).
+			Build()
+
+		mockKubernetesVersionDetector = version.NewMockKubernetesVersionDetector(ctrl)
+		k8sVersion := "1.30.0"
+		mockKubernetesVersionDetector.EXPECT().GetKubernetesVersion(gomock.Any(), gomock.Any()).Return(&k8sVersion, nil).AnyTimes()
+
+		machineTemplate := getMachineTemplate("infratemplate", namespace)
+		Expect(k8sClient.Create(ctx, &machineTemplate)).To(Succeed())
+
+		typeNamespacedName = types.NamespacedName{
+			Name:      openshiftAssistedControlPlaneName,
+			Namespace: namespace,
+		}
+
+		controllerReconciler = &OpenshiftAssistedControlPlaneReconciler{
+			Client:             k8sClient,
+			Scheme:             k8sClient.Scheme(),
+			K8sVersionDetector: mockKubernetesVersionDetector,
+		}
+
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+		Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+
+		cluster = testutils.NewCluster(clusterName, namespace)
+		Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
+
+		oacp = testutils.NewOpenshiftAssistedControlPlane(namespace, openshiftAssistedControlPlaneName)
+		oacp.SetOwnerReferences([]metav1.OwnerReference{
+			*metav1.NewControllerRef(cluster, clusterv1.GroupVersion.WithKind(clusterv1.ClusterKind)),
+		})
+		oacp.Spec.MachineTemplate.InfrastructureRef = corev1.ObjectReference{
+			Kind:       "Metal3MachineTemplate",
+			Namespace:  namespace,
+			Name:       "infratemplate",
+			APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+		}
+	})
+
+	AfterEach(func() {
+		ctrl.Finish()
+	})
+
+	Context("Scale up operations", func() {
+		It("should create a new machine when scaling up", func() {
+			expectedMachineNumber := 3
+
+			oacp.Spec.Replicas = int32(expectedMachineNumber)
+			Expect(k8sClient.Create(ctx, oacp)).To(Succeed())
+
+			// Each reconcile will only scale up one machine
+			for i := 0; i < expectedMachineNumber; i++ {
+				result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrlruntime.Result{}))
+			}
+
+			// the fourth reconcile should have no effect on scaling up machines
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrlruntime.Result{}))
+
+			machineList := &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+			Expect(machineList.Items).To(HaveLen(expectedMachineNumber))
+
+			// Verify machine properties
+			for _, machine := range machineList.Items {
+				Expect(machine.Labels).To(HaveKeyWithValue(clusterv1.ClusterNameLabel, clusterName))
+				Expect(machine.Labels).To(HaveKeyWithValue(clusterv1.MachineControlPlaneLabel, ""))
+				Expect(machine.Annotations).To(HaveKeyWithValue("bmac.agent-install.openshift.io/role", "master"))
+			}
+		})
+
+		It("should distribute machines across failure domains", func() {
+			expectedMachineNumber := 3
+
+			oacp.Spec.Replicas = int32(expectedMachineNumber)
+			Expect(k8sClient.Create(ctx, oacp)).To(Succeed())
+
+			cluster.Status.FailureDomains = map[string]clusterv1.FailureDomainSpec{
+				"zone-1": {ControlPlane: true},
+				"zone-2": {ControlPlane: true},
+				"zone-3": {ControlPlane: true},
+			}
+			Expect(k8sClient.Status().Update(ctx, cluster)).To(Succeed())
+
+			// Each reconcile will only scale up one machine
+			for i := 0; i < expectedMachineNumber; i++ {
+				result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrlruntime.Result{}))
+			}
+
+			machineList := &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+			Expect(machineList.Items).To(HaveLen(3))
+
+			// Count machines per failure domain
+			fdCount := make(map[string]int)
+			for _, machine := range machineList.Items {
+				if machine.Spec.FailureDomain != nil {
+					fdCount[*machine.Spec.FailureDomain]++
+				}
+			}
+
+			// Verify distribution
+			Expect(fdCount).To(HaveLen(3))
+			for _, count := range fdCount {
+				Expect(count).To(Equal(1))
+			}
+		})
+	})
+
+	Context("Scale down operations", func() {
+		BeforeEach(func() {
+			// Ensures Cluster has Failure Domains for the initial machines
+			cluster.Status.FailureDomains = map[string]clusterv1.FailureDomainSpec{
+				"zone-1": {ControlPlane: true},
+				"zone-2": {ControlPlane: true},
+				"zone-3": {ControlPlane: true},
+			}
+			Expect(k8sClient.Status().Update(ctx, cluster)).To(Succeed())
+
+			// Create initial machines
+			oacp.Spec.Replicas = 3
+			Expect(k8sClient.Create(ctx, oacp)).To(Succeed())
+			// reconcile 3 times to scale up all replicas
+			for i := 0; i < 3; i++ {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+		})
+
+		It("should remove machines when scaling down", func() {
+			// Update replicas to scale down
+			oacp.Spec.Replicas = 1
+			Expect(k8sClient.Update(ctx, oacp)).To(Succeed())
+
+			// we need to reconcile 3 times: first two loops will downscale a replica, third will do nothing
+			for i := 0; i < 3; i++ {
+				result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrlruntime.Result{}))
+			}
+
+			machineList := &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+			Expect(machineList.Items).To(HaveLen(1))
+		})
+
+		It("should maintain failure domain balance when scaling down", func() {
+
+			// Scale down to 2 replicas
+			oacp.Spec.Replicas = 2
+			Expect(k8sClient.Update(ctx, oacp)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrlruntime.Result{}))
+
+			machineList := &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+			Expect(machineList.Items).To(HaveLen(2))
+
+			// Verify remaining machines are in different failure domains
+			domains := make(map[string]bool)
+			for _, machine := range machineList.Items {
+				Expect(machine.Spec.FailureDomain).NotTo(BeNil())
+				domains[*machine.Spec.FailureDomain] = true
+			}
+			Expect(domains).To(HaveLen(2))
+		})
+	})
+
+	Context("Machine updates", func() {
+		BeforeEach(func() {
+			oacp.Spec.Replicas = 3
+			Expect(k8sClient.Create(ctx, oacp)).To(Succeed())
+			for i := 0; i < 3; i++ {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		It("should correctly track updated machines", func() {
+			// Modify machine template
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			oacp.Spec.MachineTemplate.NodeDrainTimeout = &metav1.Duration{Duration: 10 * time.Minute}
+			Expect(k8sClient.Update(ctx, oacp)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrlruntime.Result{}))
+
+			// Verify status reflects machines needing updates
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.UpdatedReplicas).To(Equal(int32(0)))
+			Expect(oacp.Status.Replicas).To(Equal(int32(3)))
+		})
+
+		It("should mark machines as updated when matching desired state", func() {
+			machineList := &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+
+			// Update all machines to match desired state
+			for i := range machineList.Items {
+				machine := &machineList.Items[i]
+				machine.Spec.NodeDrainTimeout = oacp.Spec.MachineTemplate.NodeDrainTimeout
+				Expect(k8sClient.Update(ctx, machine)).To(Succeed())
+			}
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrlruntime.Result{}))
+
+			// Verify status shows all machines updated
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.UpdatedReplicas).To(Equal(oacp.Status.Replicas))
+		})
+
+		It("should handle bootstrap config updates", func() {
+			// Modify bootstrap config spec
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			oacp.Spec.OpenshiftAssistedConfigSpec.KernelArguments = []v1beta1.KernelArgument{{
+				Operation: "foobar",
+				Value:     "barfoo",
+			}}
+			Expect(k8sClient.Update(ctx, oacp)).To(Succeed())
+
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrlruntime.Result{}))
+
+			// Verify machines are marked for update
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.UpdatedReplicas).To(Equal(int32(0)))
+		})
+	})
+})
+
+// Create dummy machine template
+func getMachineTemplate(name string, namespace string) v1beta2.Metal3MachineTemplate {
+	return v1beta2.Metal3MachineTemplate{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Metal3MachineTemplate",
+			APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: v1beta2.Metal3MachineTemplateSpec{},
+	}
+}
 
 func checkReadyConditions(expectedReadyConditions []clusterv1.ConditionType, openshiftAssistedControlPlane *controlplanev1alpha2.OpenshiftAssistedControlPlane) {
 	for _, conditionType := range expectedReadyConditions {

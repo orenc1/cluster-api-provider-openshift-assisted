@@ -131,7 +131,7 @@ type OpenshiftAssistedConfigStatus struct {
 }
 
 //+kubebuilder:object:root=true
-//+kubebuilder:resource:shortName=oac
+//+kubebuilder:resource:shortName=oac;oacs
 //+kubebuilder:subresource:status
 
 // OpenshiftAssistedConfig is the Schema for the openshiftassistedconfig API

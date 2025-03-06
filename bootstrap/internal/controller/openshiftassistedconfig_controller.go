@@ -430,6 +430,14 @@ func (r *OpenshiftAssistedConfigReconciler) handleDeletion(ctx context.Context, 
 			}
 			config.Status.AgentRef = nil
 		}
+		if config.Status.InfraEnvRef != nil {
+			if err := r.Client.Delete(ctx, &aiv1beta1.InfraEnv{ObjectMeta: metav1.ObjectMeta{Name: config.Status.InfraEnvRef.Name, Namespace: config.Namespace}}); err != nil &&
+				!apierrors.IsNotFound(err) {
+				log.Error(err, "failed to delete infraenv associated with bootstrap config", "config", config.Namespace+"/"+config.Name)
+				return err
+			}
+			config.Status.InfraEnvRef = nil
+		}
 		controllerutil.RemoveFinalizer(config, openshiftAssistedConfigFinalizer)
 	}
 	return nil

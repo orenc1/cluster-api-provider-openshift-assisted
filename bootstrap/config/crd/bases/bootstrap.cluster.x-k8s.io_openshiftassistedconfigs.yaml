@@ -13,6 +13,7 @@ spec:
     plural: openshiftassistedconfigs
     shortNames:
     - oac
+    - oacs
     singular: openshiftassistedconfig
   scope: Namespaced
   versions:

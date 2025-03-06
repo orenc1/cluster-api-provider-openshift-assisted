@@ -21,9 +21,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
-        #value: quay.io/edge-infrastructure/assisted-service@sha256:7d1a1739abcb331ba2229fee5fc102256ac2d9bad813d467419131cb04f00948
-        #value: quay.io/edge-infrastructure/assisted-service@sha256:db6a010640b5039ed251a1df255d8d08e2f79ac87ace9d7bf1e9cfa2f23e9def
-        value: quay.io/edge-infrastructure/assisted-service@sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d
+        value: quay.io/edge-infrastructure/assisted-service@sha256:b0748fb8c0fcfacea90fac2ad7d69e32291714bde5bfbada30b9fe6e206db212
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
         value: quay.io/edge-infrastructure/assisted-service-el8@sha256:bb487fc7121a26be374792ccb6eeed7ac8a521fa78876eec87807a5da7da5121

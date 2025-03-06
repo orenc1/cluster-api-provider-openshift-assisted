@@ -11,6 +11,9 @@ spec:
     kind: OpenshiftAssistedControlPlane
     listKind: OpenshiftAssistedControlPlaneList
     plural: openshiftassistedcontrolplanes
+    shortNames:
+    - oacp
+    - oacps
     singular: openshiftassistedcontrolplane
   scope: Namespaced
   versions:
