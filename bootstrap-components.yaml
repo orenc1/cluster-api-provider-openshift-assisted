@@ -27,6 +27,7 @@ spec:
     plural: openshiftassistedconfigs
     shortNames:
     - oac
+    - oacs
     singular: openshiftassistedconfig
   scope: Namespaced
   versions:
@@ -678,7 +679,7 @@ rules:
 - apiGroups:
   - bootstrap.cluster.x-k8s.io
   resources:
-  - openshiftassistedconfigs
+  - '*'
   verbs:
   - create
   - delete
@@ -687,20 +688,6 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - bootstrap.cluster.x-k8s.io
-  resources:
-  - openshiftassistedconfigs/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - bootstrap.cluster.x-k8s.io
-  resources:
-  - openshiftassistedconfigs/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - cluster.x-k8s.io
   resources:
@@ -729,10 +716,14 @@ rules:
 - apiGroups:
   - controlplane.cluster.x-k8s.io
   resources:
-  - openshiftassistedcontrolplanes
+  - '*'
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - extensions.hive.openshift.io
@@ -753,10 +744,14 @@ rules:
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
-  - metal3machines
+  - '*'
   verbs:
+  - create
+  - delete
+  - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - infrastructure.cluster.x-k8s.io
@@ -766,14 +761,6 @@ rules:
   verbs:
   - get
   - update
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
-  - metal3machinetemplates
-  verbs:
-  - list
-  - patch
-  - watch
 - apiGroups:
   - metal3.io
   resources:
