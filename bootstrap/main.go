@@ -19,7 +19,6 @@ package main
 import (
 	"crypto/tls"
 	"flag"
-	"net/http"
 	"os"
 
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
@@ -38,6 +37,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -119,7 +119,8 @@ func main() {
 		TLSOpts: tlsOpts,
 	})
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	clientConfig := ctrl.GetConfigOrDie()
+	mgr, err := ctrl.NewManager(clientConfig, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress:   metricsAddr,
@@ -152,11 +153,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	tempClient, err := client.New(clientConfig, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "failed to create temp client")
+		os.Exit(1)
+	}
+	httpClient, err := assistedinstaller.GetAssistedHTTPClient(Options.AssistedInstallerServiceConfig, tempClient)
+	if err != nil {
+		setupLog.Error(err, "failed to create assisted-service http client")
+		os.Exit(1)
+	}
 	if err = (&controller.OpenshiftAssistedConfigReconciler{
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
 		AssistedInstallerConfig: Options.AssistedInstallerServiceConfig,
-		HttpClient:              &http.Client{},
+		HttpClient:              httpClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OpenshiftAssistedConfig")
 		os.Exit(1)
