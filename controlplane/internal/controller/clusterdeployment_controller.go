@@ -75,21 +75,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	log.WithValues("openshiftassisted_control_plane", acp.Name, "openshiftassisted_control_plane_namespace", acp.Namespace)
 
-	if clusterDeployment.Spec.ClusterInstallRef != nil && r.agentClusterInstallExists(ctx, clusterDeployment.Spec.ClusterInstallRef.Name, clusterDeployment.Namespace) {
-		log.V(logutil.TraceLevel).Info(
-			"skipping reconciliation: cluster deployment already has a referenced agent cluster install",
-			"agent_cluster_install", clusterDeployment.Spec.ClusterInstallRef.Name,
-		)
-		return ctrl.Result{}, nil
-	}
-
 	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
-}
-
-func (r *ClusterDeploymentReconciler) agentClusterInstallExists(ctx context.Context, agentClusterInstallName, namespace string) bool {
-	agentclusterinstall := &hiveext.AgentClusterInstall{}
-	err := r.Client.Get(ctx, client.ObjectKey{Name: agentClusterInstallName, Namespace: namespace}, agentclusterinstall)
-	return err != nil
 }
 
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
