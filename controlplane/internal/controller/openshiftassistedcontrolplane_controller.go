@@ -544,7 +544,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) updateReplicaStatus(ctx contex
 	}
 
 	acp.Status.Replicas = int32(machines.Len())
-	acp.Status.UnavailableReplicas = desiredReplicas - int32(readyMachines)
+	acp.Status.UnavailableReplicas = acp.Status.Replicas - int32(readyMachines)
 	acp.Status.ReadyReplicas = int32(readyMachines)
 	if acp.Status.ReadyReplicas == desiredReplicas {
 		conditions.MarkTrue(acp, controlplanev1alpha2.MachinesCreatedCondition)
