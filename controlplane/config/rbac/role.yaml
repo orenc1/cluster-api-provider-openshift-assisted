@@ -50,6 +50,8 @@ rules:
   resources:
   - clusters
   - clusters/status
+  - machines
+  - machines/status
   verbs:
   - create
   - delete
@@ -72,19 +74,6 @@ rules:
   - machinepools
   verbs:
   - list
-- apiGroups:
-  - cluster.x-k8s.io
-  resources:
-  - machines
-  - machines/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - controlplane.cluster.x-k8s.io
   resources:
@@ -133,6 +122,7 @@ rules:
   - hive.openshift.io
   resources:
   - clusterdeployments
+  - clusterimagesets
   verbs:
   - create
   - delete
@@ -148,32 +138,9 @@ rules:
   verbs:
   - get
 - apiGroups:
-  - hive.openshift.io
-  resources:
-  - clusterimagesets
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
   - metal3machines
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
   - metal3machinetemplates
   verbs:
   - create

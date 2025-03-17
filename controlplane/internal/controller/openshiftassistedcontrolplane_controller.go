@@ -469,12 +469,18 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 		return err
 	}
 
+	upToDateMachines := collections.Machines{}
+	for _, machine := range machines {
+		if r.hasExpectedSpecs(ctx, machine, oacp, cluster) {
+			upToDateMachines.Insert(machine)
+		}
+	}
 	numMachines := machines.Len()
 	desiredReplicas := int(oacp.Spec.Replicas)
 	machinesToCreate := desiredReplicas - numMachines
 	var errs []error
 	if machinesToCreate > 0 {
-		fd, err := failuredomains.NextFailureDomainForScaleUp(ctx, cluster, machines)
+		fd, err := failuredomains.NextFailureDomainForScaleUp(ctx, cluster, machines, upToDateMachines)
 		if err != nil {
 			return fmt.Errorf("failed to find failure domain for scale up: %v", err)
 		}
@@ -495,7 +501,8 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 		}
 		log.V(logutil.InfoLevel).Info("creating controlplane machine", "machine name", machine.Name)
 	}
-	r.updateReplicaStatus(ctx, oacp, machines, cluster)
+
+	r.updateReplicaStatus(oacp, machines, upToDateMachines)
 	return kerrors.NewAggregate(errs)
 }
 
@@ -532,27 +539,22 @@ func (r *OpenshiftAssistedControlPlaneReconciler) scaleUpControlPlane(ctx contex
 	return machine, nil
 }
 
-func (r *OpenshiftAssistedControlPlaneReconciler) updateReplicaStatus(ctx context.Context, acp *controlplanev1alpha2.OpenshiftAssistedControlPlane, machines collections.Machines, cluster *clusterv1.Cluster) {
-	desiredReplicas := acp.Spec.Replicas
+func (r *OpenshiftAssistedControlPlaneReconciler) updateReplicaStatus(oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane, machines collections.Machines, upToDateMachines collections.Machines) {
+	desiredReplicas := oacp.Spec.Replicas
 	readyMachines := machines.Filter(collections.IsReady()).Len()
 
-	acp.Status.UpdatedReplicas = 0
-	for _, machine := range machines {
-		if r.hasExpectedSpecs(ctx, machine, acp, cluster) {
-			acp.Status.UpdatedReplicas++
-		}
-	}
+	oacp.Status.UpdatedReplicas = int32(upToDateMachines.Len())
 
-	acp.Status.Replicas = int32(machines.Len())
-	acp.Status.UnavailableReplicas = acp.Status.Replicas - int32(readyMachines)
-	acp.Status.ReadyReplicas = int32(readyMachines)
-	if acp.Status.ReadyReplicas == desiredReplicas {
-		conditions.MarkTrue(acp, controlplanev1alpha2.MachinesCreatedCondition)
+	oacp.Status.Replicas = int32(machines.Len())
+	oacp.Status.UnavailableReplicas = oacp.Status.Replicas - int32(readyMachines)
+	oacp.Status.ReadyReplicas = int32(readyMachines)
+	if oacp.Status.ReadyReplicas == desiredReplicas {
+		conditions.MarkTrue(oacp, controlplanev1alpha2.MachinesCreatedCondition)
 	}
 
 	// Aggregate the operational state of all the machines; while aggregating we are adding the
 	// source ref (reason@machine/name) so the problem can be easily tracked down to its source machine.
-	conditions.SetAggregate(acp,
+	conditions.SetAggregate(oacp,
 		clusterv1.MachinesReadyCondition,
 		machines.ConditionGetters(),
 		conditions.AddSourceRef(),

@@ -31,7 +31,9 @@ var _ = Describe("Failure Domains", func() {
 				}
 				machines := collections.Machines{}
 
-				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines)
+				upToDateMachines := collections.Machines{}
+
+				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines, upToDateMachines)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(domain).To(BeNil())
 			})
@@ -49,8 +51,9 @@ var _ = Describe("Failure Domains", func() {
 					},
 				}
 				machines := collections.Machines{}
+				upToDateMachines := collections.Machines{}
 
-				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines)
+				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines, upToDateMachines)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(domain).ToNot(BeNil())
 				Expect(*domain).To(Equal("zone-1"))
@@ -75,8 +78,9 @@ var _ = Describe("Failure Domains", func() {
 					machinesParams{"zone-1", 3},
 					machinesParams{"zone-2", 1},
 				)
+				upToDateMachines := machines
 
-				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines)
+				domain, err := NextFailureDomainForScaleUp(ctx, cluster, machines, upToDateMachines)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(domain).ToNot(BeNil())
 				Expect(*domain).To(Equal("zone-2"))

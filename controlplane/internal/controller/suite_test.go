@@ -19,7 +19,7 @@ package controller
 import (
 	"testing"
 
-	v1beta2 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
+	metal3v1beta1 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -61,7 +61,7 @@ var _ = BeforeSuite(func() {
 	utilruntime.Must(clusterv1.AddToScheme(testScheme))
 	utilruntime.Must(hivev1.AddToScheme(testScheme))
 	utilruntime.Must(hiveext.AddToScheme(testScheme))
-	utilruntime.Must(v1beta2.AddToScheme(testScheme))
+	utilruntime.Must(metal3v1beta1.AddToScheme(testScheme))
 	utilruntime.Must(bootstrapv1alpha1.AddToScheme(testScheme))
 
 })

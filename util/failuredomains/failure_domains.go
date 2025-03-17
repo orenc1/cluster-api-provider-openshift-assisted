@@ -13,12 +13,13 @@ func NextFailureDomainForScaleUp(
 	ctx context.Context,
 	cluster *clusterv1.Cluster,
 	machines collections.Machines,
+	upToDateMachines collections.Machines,
 ) (*string, error) {
 	failureDomains := FailureDomains(cluster).FilterControlPlane()
 	if len(failureDomains) == 0 {
 		return nil, nil
 	}
-	return failuredomains.PickFewest(ctx, failureDomains, machines), nil
+	return failuredomains.PickFewest(ctx, failureDomains, machines, upToDateMachines), nil
 }
 
 // NextFailureDomainForScaleUp returns the failure domain with the most number of machines

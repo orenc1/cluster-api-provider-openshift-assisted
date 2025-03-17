@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	v1beta2 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
+	metal3v1beta1 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
 	"github.com/openshift/assisted-service/api/v1beta1"
 
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
@@ -514,8 +514,7 @@ var _ = Describe("Scale operations and machine updates", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		k8sClient = fakeclient.NewClientBuilder().
 			WithScheme(testScheme).
-			WithStatusSubresource(&controlplanev1alpha2.OpenshiftAssistedControlPlane{}).
-			WithStatusSubresource(&clusterv1.Cluster{}).
+			WithStatusSubresource(&clusterv1.Cluster{}, &controlplanev1alpha2.OpenshiftAssistedControlPlane{}, &clusterv1.Machine{}).
 			Build()
 
 		mockKubernetesVersionDetector = version.NewMockKubernetesVersionDetector(ctrl)
@@ -626,6 +625,69 @@ var _ = Describe("Scale operations and machine updates", func() {
 			for _, count := range fdCount {
 				Expect(count).To(Equal(1))
 			}
+		})
+	})
+
+	Context("ReadyReplicas status", func() {
+		var (
+			machineList *clusterv1.MachineList
+		)
+
+		BeforeEach(func() {
+			oacp.Spec.Replicas = 3
+			Expect(k8sClient.Create(ctx, oacp)).To(Succeed())
+			for i := 0; i < 3; i++ {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			machineList = &clusterv1.MachineList{}
+			Expect(k8sClient.List(ctx, machineList, client.InNamespace(namespace))).To(Succeed())
+		})
+
+		It("should have ReadyReplicas count correct when all machines are ready", func() {
+			for i := range machineList.Items {
+				machine := &machineList.Items[i]
+				conditions.MarkTrue(machine, clusterv1.ReadyCondition)
+				Expect(k8sClient.Status().Update(ctx, machine)).To(Succeed())
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.ReadyReplicas).To(Equal(int32(3)))
+		})
+
+		It("should have ReadyReplicas count correct when no machines are ready", func() {
+			for i := range machineList.Items {
+				machine := &machineList.Items[i]
+				conditions.MarkFalse(machine, clusterv1.ReadyCondition, "NotReady", clusterv1.ConditionSeverityError, "Machine is not ready")
+				Expect(k8sClient.Status().Update(ctx, machine)).To(Succeed())
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.ReadyReplicas).To(Equal(int32(0)))
+		})
+
+		It("should have ReadyReplicas count correct when some machines are ready", func() {
+			for i := range machineList.Items {
+				machine := &machineList.Items[i]
+				if i%2 == 0 {
+					conditions.MarkTrue(machine, clusterv1.ReadyCondition)
+				} else {
+					conditions.MarkFalse(machine, clusterv1.ReadyCondition, "NotReady", clusterv1.ConditionSeverityError, "Machine is not ready")
+				}
+				Expect(k8sClient.Status().Update(ctx, machine)).To(Succeed())
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, oacp)).To(Succeed())
+			Expect(oacp.Status.ReadyReplicas).To(Equal(int32(2)))
 		})
 	})
 
@@ -758,8 +820,8 @@ var _ = Describe("Scale operations and machine updates", func() {
 })
 
 // Create dummy machine template
-func getMachineTemplate(name string, namespace string) v1beta2.Metal3MachineTemplate {
-	return v1beta2.Metal3MachineTemplate{
+func getMachineTemplate(name string, namespace string) metal3v1beta1.Metal3MachineTemplate {
+	return metal3v1beta1.Metal3MachineTemplate{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Metal3MachineTemplate",
 			APIVersion: "infrastructure.cluster.x-k8s.io/v1beta1",
@@ -768,7 +830,7 @@ func getMachineTemplate(name string, namespace string) v1beta2.Metal3MachineTemp
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: v1beta2.Metal3MachineTemplateSpec{},
+		Spec: metal3v1beta1.Metal3MachineTemplateSpec{},
 	}
 }
 
