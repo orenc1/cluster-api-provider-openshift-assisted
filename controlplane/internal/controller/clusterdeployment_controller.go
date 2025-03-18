@@ -18,17 +18,25 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"slices"
+	"strings"
 
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
 	"github.com/openshift-assisted/cluster-api-agent/util"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+
 	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
+
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,7 +48,13 @@ import (
 )
 
 const (
-	InstallConfigOverrides = aiv1beta1.Group + "/install-config-overrides"
+	InstallConfigOverrides             = aiv1beta1.Group + "/install-config-overrides"
+	defaultBaremetalBaselineCapability = "None"
+	defaultBaselineCapability          = "vCurrent"
+)
+
+var (
+	defaultBaremetalAdditionalCapabilities = []configv1.ClusterVersionCapability{"baremetal", "Console", "Insights", "OperatorLifecycleManager", "Ingress"}
 )
 
 // ClusterDeploymentReconciler reconciles a ClusterDeployment object
@@ -250,9 +264,9 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 		aci.Spec.APIVIPs = acp.Spec.Config.APIVIPs
 		aci.Spec.IngressVIPs = acp.Spec.Config.IngressVIPs
 		aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
-		aci.Annotations = map[string]string{
-			InstallConfigOverrides: `{"capabilities": {"baselineCapabilitySet": "None", "additionalEnabledCapabilities": ["baremetal","Console","Insights","OperatorLifecycleManager","Ingress"]}}"`,
-		}
+	}
+	if err := setACICapabilities(&acp, aci); err != nil {
+		return nil, err
 	}
 	return aci, nil
 }
@@ -272,4 +286,89 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 		return err
 	}
 	return nil
+}
+
+type InstallConfigOverride struct {
+	Capability configv1.ClusterVersionCapabilitiesSpec `json:"capabilities,omitempty"`
+}
+
+// setACICapabilities will set the install config override annotation in the AgentClusterInstall if there
+// are additional enabled capabilities that need to be defined.
+// For SNO (single node openshift) and non-baremetal platform MNO (multi-node openshift), this is set if
+// the OpenshiftAssistedControlPlane has additional capabilities set.
+// For MNO (multi-node openshift), this is set to the default list for baremetal platform,
+// but the OpenshiftAssistedControlPlane can specify additional capabilities to be appended to this list.
+func setACICapabilities(oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane, aci *hiveext.AgentClusterInstall) error {
+	isBaremetalPlatform := aci.Spec.PlatformType == hiveext.BareMetalPlatformType
+	if isCapabilitiesEmpty(oacp.Spec.Config.Capabilities) && !isBaremetalPlatform {
+		return nil
+	}
+	var installCfgOverride InstallConfigOverride
+	baselineCapability, err := getBaselineCapability(oacp.Spec.Config.Capabilities.BaselineCapability, isBaremetalPlatform)
+	if err != nil {
+		return err
+	}
+	installCfgOverride.Capability.BaselineCapabilitySet = configv1.ClusterVersionCapabilitySet(baselineCapability)
+
+	additionalEnabledCapabilities := getAdditionalCapabilities(oacp.Spec.Config.Capabilities.AdditionalEnabledCapabilities, isBaremetalPlatform)
+	installCfgOverride.Capability.AdditionalEnabledCapabilities = additionalEnabledCapabilities
+
+	installCfgOverrideStr, err := json.Marshal(installCfgOverride)
+	if err != nil {
+		return err
+	}
+
+	if aci.Annotations == nil {
+		aci.Annotations = make(map[string]string)
+	}
+
+	aci.Annotations[InstallConfigOverrides] = string(installCfgOverrideStr)
+	return nil
+}
+
+func getBaselineCapability(capability string, isBaremetalPlatform bool) (string, error) {
+	baselineCapability := capability
+	if baselineCapability == "None" || baselineCapability == "vCurrent" {
+		return baselineCapability, nil
+	}
+
+	if baselineCapability == "" {
+		baselineCapability = defaultBaselineCapability
+		if isBaremetalPlatform {
+			baselineCapability = defaultBaremetalBaselineCapability
+		}
+		return baselineCapability, nil
+	}
+
+	var baselineCapabilityRegexp = regexp.MustCompile(`v4\.[0-9]+`)
+	if !baselineCapabilityRegexp.MatchString(baselineCapability) {
+		return "",
+			fmt.Errorf("invalid baseline capability set, must be one of: None, vCurrent, or v4.x. Got: [%s]", baselineCapability)
+	}
+	return baselineCapability, nil
+}
+
+func getAdditionalCapabilities(specifiedAdditionalCapabilities []string, isBaremetalPlatform bool) []configv1.ClusterVersionCapability {
+	additionalCapabilitiesList := []configv1.ClusterVersionCapability{}
+	if isBaremetalPlatform {
+		additionalCapabilitiesList = append([]configv1.ClusterVersionCapability{}, defaultBaremetalAdditionalCapabilities...)
+	}
+
+	for _, capability := range specifiedAdditionalCapabilities {
+		// Ignore MAPI for baremetal MNO clusters and ignore duplicates
+		if (strings.EqualFold(capability, "MachineAPI") && isBaremetalPlatform) || slices.Contains(additionalCapabilitiesList, configv1.ClusterVersionCapability(capability)) {
+			continue
+		}
+		additionalCapabilitiesList = append(additionalCapabilitiesList, configv1.ClusterVersionCapability(capability))
+	}
+
+	if len(additionalCapabilitiesList) < 1 {
+		return nil
+	}
+
+	return additionalCapabilitiesList
+}
+
+func isCapabilitiesEmpty(capabilities controlplanev1alpha2.Capabilities) bool {
+	return equality.Semantic.DeepEqual(capabilities, controlplanev1alpha2.Capabilities{})
 }
