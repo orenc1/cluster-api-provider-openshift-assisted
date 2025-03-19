@@ -219,7 +219,24 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 }
 
 func (r *OpenshiftAssistedControlPlaneReconciler) upgradeWorkloadCluster(ctx context.Context, cluster *clusterv1.Cluster, oacp *controlplanev1alpha2.OpenshiftAssistedControlPlane, log logr.Logger, pullSecret []byte) (ctrl.Result, error) {
-	// Retrieve KubeConfig
+	var isUpdateInProgress bool
+	defer func() {
+		if isUpdateInProgress || !isWorkloadClusterRunningDesiredVersion(oacp) {
+			conditions.MarkFalse(
+				oacp,
+				controlplanev1alpha2.UpgradeCompletedCondition,
+				controlplanev1alpha2.UpgradeInProgressReason,
+				clusterv1.ConditionSeverityInfo,
+				"upgrade to version %s in progress",
+				oacp.Spec.DistributionVersion,
+			)
+			return
+		}
+		if conditions.IsFalse(oacp, controlplanev1alpha2.UpgradeCompletedCondition) {
+			conditions.MarkTrue(oacp, controlplanev1alpha2.UpgradeCompletedCondition)
+		}
+	}()
+
 	kubeConfig, err := util.GetWorkloadKubeconfig(ctx, r.Client, cluster.Name, cluster.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -229,20 +246,11 @@ func (r *OpenshiftAssistedControlPlaneReconciler) upgradeWorkloadCluster(ctx con
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	isUpdateInProgress, err := upgrader.IsUpgradeInProgress(ctx)
+	isUpdateInProgress, err = upgrader.IsUpgradeInProgress(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if isUpdateInProgress {
-		conditions.MarkFalse(
-			oacp,
-			controlplanev1alpha2.UpgradeCompletedCondition,
-			controlplanev1alpha2.UpgradeInProgressReason,
-			clusterv1.ConditionSeverityInfo,
-			"upgrade to version %s in progress",
-			oacp.Spec.DistributionVersion,
-		)
-	}
+
 	oacp.Status.DistributionVersion, err = upgrader.GetCurrentVersion(ctx)
 	if err != nil {
 		log.V(logutil.WarningLevel).Info("failed to get OpenShift version from ClusterVersion", "error", err.Error())
@@ -264,7 +272,6 @@ func (r *OpenshiftAssistedControlPlaneReconciler) upgradeWorkloadCluster(ctx con
 	if isWorkloadClusterRunningDesiredVersion(oacp) && !isUpdateInProgress {
 		log.V(logutil.WarningLevel).Info("Cluster is now running expected version, upgraded completed")
 
-		conditions.MarkTrue(oacp, controlplanev1alpha2.UpgradeCompletedCondition)
 		return ctrl.Result{}, nil
 	}
 
