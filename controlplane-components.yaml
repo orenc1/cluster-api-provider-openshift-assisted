@@ -15,7 +15,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.14.0
+    controller-gen.kubebuilder.io/version: v0.17.2
   labels:
     cluster.x-k8s.io/v1beta1: v1alpha2
   name: openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io
@@ -120,6 +120,24 @@ spec:
                     description: BaseDomain is the base domain to which the cluster
                       should belong.
                     type: string
+                  capabilities:
+                    description: Capabilities specifies the capabilities set during
+                      an OpenShift cluster installation.
+                    properties:
+                      additionalEnabledCapabilities:
+                        description: |-
+                          AdditionalEnabledCapabilities is a list of OpenShift capabilities to specifically enable
+                          during the installation of the workload cluster. It is empty by default.
+                        items:
+                          type: string
+                        type: array
+                      baselineCapability:
+                        description: |-
+                          BaselineCapability provides a default set of capabilities to enable during the installation.
+                          Valid values are vCurrent, v4.x, or None. See the OpenShift doc for more details.
+                          Defaults to None for baremetal platform workload clusters or vCurrent otherwise.
+                        type: string
+                    type: object
                   clusterName:
                     description: |-
                       ClusterName is the friendly name of the cluster. It is used for subdomains,
@@ -158,10 +176,13 @@ spec:
                       image registries and their corresponding certificate bundles to be used in the spoke cluster
                     properties:
                       name:
+                        default: ""
                         description: |-
                           Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
                           More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                          TODO: Add other useful fields. apiVersion, kind, uid?
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
@@ -217,10 +238,13 @@ spec:
                       the cluster installation
                     properties:
                       name:
+                        default: ""
                         description: |-
                           Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
                           More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                          TODO: Add other useful fields. apiVersion, kind, uid?
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
@@ -254,7 +278,6 @@ spec:
                           the event) or if no container name is specified "spec.containers[2]" (container with
                           index 2 in this pod). This syntax is chosen only to have some well-defined way of
                           referencing a part of an object.
-                          TODO: this design is not final and this field is subject to change in the future.
                         type: string
                       kind:
                         description: |-
@@ -292,7 +315,7 @@ spec:
                         additionalProperties:
                           type: string
                         description: |-
-                          Annotations is an unstructured key value map stored with a resource that may be
+                          annotations is an unstructured key value map stored with a resource that may be
                           set by external tools to store and retrieve arbitrary metadata. They are not
                           queryable and should be preserved when modifying objects.
                           More info: http://kubernetes.io/docs/user-guide/annotations
@@ -465,10 +488,13 @@ spec:
                       when pulling images.
                     properties:
                       name:
+                        default: ""
                         description: |-
                           Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
                           More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                          TODO: Add other useful fields. apiVersion, kind, uid?
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
@@ -504,7 +530,6 @@ spec:
                       the event) or if no container name is specified "spec.containers[2]" (container with
                       index 2 in this pod). This syntax is chosen only to have some well-defined way of
                       referencing a part of an object.
-                      TODO: this design is not final and this field is subject to change in the future.
                     type: string
                   kind:
                     description: |-
@@ -555,20 +580,20 @@ spec:
                       description: |-
                         The reason for the condition's last transition in CamelCase.
                         The specific API may choose whether or not this field is considered a guaranteed API.
-                        This field may not be empty.
+                        This field may be empty.
                       type: string
                     severity:
                       description: |-
-                        Severity provides an explicit classification of Reason code, so the users or machines can immediately
+                        severity provides an explicit classification of Reason code, so the users or machines can immediately
                         understand the current situation and act accordingly.
                         The Severity field MUST be set only when Status=False.
                       type: string
                     status:
-                      description: Status of the condition, one of True, False, Unknown.
+                      description: status of the condition, one of True, False, Unknown.
                       type: string
                     type:
                       description: |-
-                        Type of condition in CamelCase or in foo.example.com/CamelCase.
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
                         Many .condition.type values are consistent across resources like Available, but because arbitrary conditions
                         can be useful (see .node.status.conditions), the ability to deconflict is important.
                       type: string
@@ -762,6 +787,8 @@ rules:
   resources:
   - clusters
   - clusters/status
+  - machines
+  - machines/status
   verbs:
   - create
   - delete
@@ -784,19 +811,6 @@ rules:
   - machinepools
   verbs:
   - list
-- apiGroups:
-  - cluster.x-k8s.io
-  resources:
-  - machines
-  - machines/status
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - controlplane.cluster.x-k8s.io
   resources:
@@ -845,6 +859,7 @@ rules:
   - hive.openshift.io
   resources:
   - clusterdeployments
+  - clusterimagesets
   verbs:
   - create
   - delete
@@ -860,32 +875,9 @@ rules:
   verbs:
   - get
 - apiGroups:
-  - hive.openshift.io
-  resources:
-  - clusterimagesets
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
   - infrastructure.cluster.x-k8s.io
   resources:
   - metal3machines
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - infrastructure.cluster.x-k8s.io
-  resources:
   - metal3machinetemplates
   verbs:
   - create
