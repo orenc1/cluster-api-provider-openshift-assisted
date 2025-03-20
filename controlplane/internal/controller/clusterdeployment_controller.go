@@ -37,7 +37,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -104,7 +103,8 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		log.Error(err, "failed to retrieve owner Cluster from the API Server")
 		return ctrl.Result{}, err
 	}
-	imageSet, err := r.createOrUpdateClusterImageSet(ctx, clusterDeployment.Name, getReleaseImage(oacp))
+	imageSet := computeClusterImageSet(clusterDeployment.Name, getReleaseImage(oacp))
+	err = util.CreateOrUpdate(ctx, r.Client, imageSet)
 	if err != nil {
 		log.Error(err, "failed creating ClusterImageSet")
 		return ctrl.Result{}, err
@@ -116,7 +116,7 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		return ctrl.Result{}, err
 	}
 
-	if err := r.createOrUpdateAgentClusterInstall(ctx, aci); err != nil {
+	if err := util.CreateOrUpdate(ctx, r.Client, aci); err != nil {
 		log.Error(err, "failed creating AgentClusterInstall")
 		return ctrl.Result{}, err
 	}
@@ -167,15 +167,6 @@ func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 	return r.Client.Update(ctx, cd)
 }
 
-func (r *ClusterDeploymentReconciler) createOrUpdateClusterImageSet(
-	ctx context.Context,
-	imageSetName, releaseImage string,
-) (*hivev1.ClusterImageSet, error) {
-	imageSet := computeClusterImageSet(imageSetName, releaseImage)
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, imageSet, func() error { return nil })
-	return imageSet, client.IgnoreAlreadyExists(err)
-}
-
 func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.ClusterImageSet {
 	return &hivev1.ClusterImageSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -185,14 +176,6 @@ func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.Cl
 			ReleaseImage: releaseImage,
 		},
 	}
-}
-
-func (r *ClusterDeploymentReconciler) createOrUpdateAgentClusterInstall(
-	ctx context.Context,
-	aci *hiveext.AgentClusterInstall,
-) error {
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, aci, func() error { return nil })
-	return client.IgnoreAlreadyExists(err)
 }
 
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
@@ -282,7 +265,7 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 		return err
 	}
 
-	if _, err := ctrl.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap, func() error { return nil }); err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := util.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap); err != nil {
 		return err
 	}
 	return nil

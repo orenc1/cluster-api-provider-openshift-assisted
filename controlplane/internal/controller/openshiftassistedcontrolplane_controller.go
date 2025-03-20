@@ -445,7 +445,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensureClusterDeployment(
 	if acp.Status.ClusterDeploymentRef == nil {
 		clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, clusterName)
 		_ = controllerutil.SetOwnerReference(acp, clusterDeployment, r.Scheme)
-		if _, err := ctrl.CreateOrUpdate(ctx, r.Client, clusterDeployment, func() error { return nil }); err != nil {
+		if err := util.CreateOrUpdate(ctx, r.Client, clusterDeployment); err != nil {
 			return err
 		}
 		ref, err := reference.GetReference(r.Scheme, clusterDeployment)
