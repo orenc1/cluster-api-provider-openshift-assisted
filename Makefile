@@ -152,6 +152,11 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 	- $(CONTAINER_TOOL) buildx rm project-v3-builder
 	rm Dockerfile.cross
 
+.PHONY: generate-published-manifests
+generate-published-manifests: build-installer
+	cp $(DIST_DIR)/controlplane_install.yaml controlplane-components.yaml
+	cp $(DIST_DIR)/bootstrap_install.yaml bootstrap-components.yaml
+
 .PHONY: build-installer
 build-installer:
 	$(MAKE) build-installer-provider PROVIDER=bootstrap
@@ -190,6 +195,10 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+.PHONY: check-generated-files
+check-generated-files: generate manifests generate-published-manifests generate-mocks
+	git add . && git diff --quiet && git diff --cached --quiet
 
 ##@ Dependencies
 
