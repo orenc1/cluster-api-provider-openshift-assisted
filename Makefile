@@ -198,7 +198,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 
 .PHONY: check-generated-files
 check-generated-files: generate manifests generate-published-manifests generate-mocks
-	git add . && git diff --quiet && git diff --cached --quiet
+	git add . && git diff --staged --exit-code
 
 ##@ Dependencies
 
