@@ -108,7 +108,7 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	imageSet := computeClusterImageSet(clusterDeployment.Name, getReleaseImage(oacp))
+	imageSet := computeClusterImageSet(clusterDeployment.Name, getReleaseImage(oacp, arch))
 	err = util.CreateOrUpdate(ctx, r.Client, imageSet)
 	if err != nil {
 		log.Error(err, "failed creating ClusterImageSet")
