@@ -104,7 +104,7 @@ var _ = Describe("ClusterDeployment Controller", func() {
 			cluster := utils.NewCluster(clusterName, namespace)
 			Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
 
-			cd := utils.NewClusterDeployment(namespace, clusterDeploymentName)
+			cd := utils.NewClusterDeploymentWithOwnerCluster(namespace, clusterDeploymentName, clusterName)
 			Expect(k8sClient.Create(ctx, cd)).To(Succeed())
 
 			enableOn := models.DiskEncryptionEnableOnAll
@@ -155,6 +155,16 @@ var _ = Describe("ClusterDeployment Controller", func() {
 			Expect(aci.Spec.Proxy).To(Equal(oacp.Spec.Config.Proxy))
 			Expect(aci.Spec.MastersSchedulable).To(Equal(oacp.Spec.Config.MastersSchedulable))
 			Expect(aci.Spec.SSHPublicKey).To(Equal(oacp.Spec.Config.SSHAuthorizedKey))
+
+			// Assert ACI has correct labels
+			Expect(aci.Labels).NotTo(BeEmpty())
+			Expect(aci.Labels).To(HaveKey(clusterv1.ClusterNameLabel))
+			Expect(aci.Labels[clusterv1.ClusterNameLabel]).To(Equal(clusterName))
+			Expect(aci.Labels).To(HaveKey(clusterv1.MachineControlPlaneLabel))
+			Expect(aci.Labels).To(HaveKey(clusterv1.MachineControlPlaneNameLabel))
+			Expect(aci.Labels[clusterv1.MachineControlPlaneNameLabel]).To(Equal(oacp.Name))
+			Expect(aci.Labels).To(HaveKey(hiveext.ClusterConsumerLabel))
+			Expect(aci.Labels[hiveext.ClusterConsumerLabel]).To(Equal(openshiftAssistedControlPlaneKind))
 
 			clusterImageSet := &hivev1.ClusterImageSet{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: cd.Name}, clusterImageSet)).To(Succeed())

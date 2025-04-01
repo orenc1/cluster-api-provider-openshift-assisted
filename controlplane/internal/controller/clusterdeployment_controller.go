@@ -247,6 +247,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 			ManifestsConfigMapRefs: additionalManifests,
 		},
 	}
+	aci.Labels[hiveext.ClusterConsumerLabel] = openshiftAssistedControlPlaneKind
 
 	if len(acp.Spec.Config.APIVIPs) > 0 && len(acp.Spec.Config.IngressVIPs) > 0 {
 		aci.Spec.APIVIPs = acp.Spec.Config.APIVIPs
