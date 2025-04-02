@@ -129,48 +129,51 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      clusterDeployment.Name,
 			Namespace: clusterDeployment.Namespace,
-			Labels: util.ControlPlaneMachineLabelsForCluster(
-				&oacp,
-				clusterDeployment.Labels[clusterv1.ClusterNameLabel],
-			),
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&oacp, controlplanev1alpha2.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
-			},
-		},
-		Spec: hiveext.AgentClusterInstallSpec{
-			ClusterDeploymentRef: corev1.LocalObjectReference{Name: clusterDeployment.Name},
-			PlatformType:         hiveext.PlatformType(configv1.NonePlatformType),
-			ProvisionRequirements: hiveext.ProvisionRequirements{
-				ControlPlaneAgents: int(oacp.Spec.Replicas),
-				WorkerAgents:       workerNodes,
-			},
-			DiskEncryption:     oacp.Spec.Config.DiskEncryption,
-			MastersSchedulable: oacp.Spec.Config.MastersSchedulable,
-			Proxy:              oacp.Spec.Config.Proxy,
-			SSHPublicKey:       oacp.Spec.Config.SSHAuthorizedKey,
-			ImageSetRef:        &hivev1.ClusterImageSetReference{Name: clusterDeployment.Name},
-			Networking: hiveext.Networking{
-				ClusterNetwork: clusterNetwork,
-				ServiceNetwork: serviceNetwork,
-			},
-			ManifestsConfigMapRefs: additionalManifests,
 		},
 	}
-	aci.Labels[hiveext.ClusterConsumerLabel] = openshiftAssistedControlPlaneKind
+	mutate := func() error {
+		aci.ObjectMeta.Labels = util.ControlPlaneMachineLabelsForCluster(
+			&oacp,
+			clusterDeployment.Labels[clusterv1.ClusterNameLabel],
+		)
+		aci.ObjectMeta.Labels[hiveext.ClusterConsumerLabel] = openshiftAssistedControlPlaneKind
+		aci.ObjectMeta.OwnerReferences = []metav1.OwnerReference{
+			*metav1.NewControllerRef(&oacp, controlplanev1alpha2.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
+		}
 
-	if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
-		aci.Spec.APIVIPs = oacp.Spec.Config.APIVIPs
-		aci.Spec.IngressVIPs = oacp.Spec.Config.IngressVIPs
-		aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
+		aci.Spec.ClusterDeploymentRef = corev1.LocalObjectReference{Name: clusterDeployment.Name}
+		aci.Spec.PlatformType = hiveext.PlatformType(configv1.NonePlatformType)
+		aci.Spec.ProvisionRequirements = hiveext.ProvisionRequirements{
+			ControlPlaneAgents: int(oacp.Spec.Replicas),
+			WorkerAgents:       workerNodes,
+		}
+		aci.Spec.DiskEncryption = oacp.Spec.Config.DiskEncryption
+		aci.Spec.MastersSchedulable = oacp.Spec.Config.MastersSchedulable
+		aci.Spec.Proxy = oacp.Spec.Config.Proxy
+		aci.Spec.SSHPublicKey = oacp.Spec.Config.SSHAuthorizedKey
+		aci.Spec.ImageSetRef = &hivev1.ClusterImageSetReference{Name: clusterDeployment.Name}
+		aci.Spec.Networking = hiveext.Networking{
+			ClusterNetwork: clusterNetwork,
+			ServiceNetwork: serviceNetwork,
+		}
+		aci.Spec.ManifestsConfigMapRefs = additionalManifests
+
+		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
+			aci.Spec.APIVIPs = oacp.Spec.Config.APIVIPs
+			aci.Spec.IngressVIPs = oacp.Spec.Config.IngressVIPs
+			aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
+		}
+		if err := setACICapabilities(&oacp, aci); err != nil {
+			return err
+		}
+		return nil
 	}
-	if err := setACICapabilities(&oacp, aci); err != nil {
+
+	if _, err = controllerutil.CreateOrUpdate(ctx, r.Client, aci, mutate); err != nil {
+		log.Error(err, "failed to create or update AgentClusterInstall")
 		return ctrl.Result{}, err
 	}
 
-	if err := util.CreateOrUpdate(ctx, r.Client, aci); err != nil {
-		log.Error(err, "failed creating AgentClusterInstall")
-		return ctrl.Result{}, err
-	}
 	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
 }
 
