@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: openshiftassistedcontrolplane-viewer-role
+  name: capoa-controlplane-openshiftassistedcontrolplane-viewer-role
 rules:
 - apiGroups:
   - controlplane.cluster.x-k8s.io

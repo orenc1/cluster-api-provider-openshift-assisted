@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: capoa-bootstrap-system
+  name: capoa-system
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -583,13 +583,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: capoa-bootstrap-controller-manager
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: capoa-bootstrap-leader-election-role
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 rules:
 - apiGroups:
   - ""
@@ -756,7 +756,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: capoa-bootstrap-leader-election-rolebinding
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -764,7 +764,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: capoa-bootstrap-controller-manager
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -777,7 +777,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: capoa-bootstrap-controller-manager
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -790,13 +790,13 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: capoa-bootstrap-controller-manager
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: capoa-bootstrap-controller-manager-metrics-service
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 spec:
   ports:
   - name: https
@@ -810,7 +810,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: capoa-bootstrap-controller-manager
-  namespace: capoa-bootstrap-system
+  namespace: capoa-system
 spec:
   replicas: 1
   selector:
@@ -818,8 +818,6 @@ spec:
       control-plane: capoa-bootstrap-controller-manager
   template:
     metadata:
-      annotations:
-        kubectl.kubernetes.io/default-container: manager
       labels:
         control-plane: capoa-bootstrap-controller-manager
     spec:

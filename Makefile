@@ -54,8 +54,8 @@ help: ## Display this help.
 
 .PHONY: manifests
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
-	cd bootstrap && $(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
-	cd controlplane && $(CONTROLLER_GEN) rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
+	cd bootstrap && $(CONTROLLER_GEN) rbac:roleName=capoa-bootstrap-manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
+	cd controlplane && $(CONTROLLER_GEN) rbac:roleName=capoa-controlplane-manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: openshiftassistedconfigtemplate-editor-role
+  name: capoa-bootstrap-openshiftassistedconfigtemplate-editor-role
 rules:
 - apiGroups:
   - bootstrap.cluster.x-k8s.io
