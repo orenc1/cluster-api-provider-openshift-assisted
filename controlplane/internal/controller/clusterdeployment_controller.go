@@ -186,15 +186,7 @@ func ensureClusterImageSet(ctx context.Context, c client.Client, imageSetName st
 	return err
 }
 
-func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
-	ctx context.Context,
-	clusterDeployment *hivev1.ClusterDeployment,
-	acp controlplanev1alpha2.OpenshiftAssistedControlPlane,
-	imageSetName string,
-	cluster *clusterv1.Cluster,
-	workerReplicas int,
-) (*hiveext.AgentClusterInstall, error) {
-	log := ctrl.LoggerFrom(ctx)
+func getClusterNetworks(cluster *clusterv1.Cluster) ([]hiveext.ClusterNetworkEntry, []string) {
 	var clusterNetwork []hiveext.ClusterNetworkEntry
 
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Pods != nil {
@@ -206,6 +198,22 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Services != nil {
 		serviceNetwork = cluster.Spec.ClusterNetwork.Services.CIDRBlocks
 	}
+
+	return clusterNetwork, serviceNetwork
+}
+
+func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
+	ctx context.Context,
+	clusterDeployment *hivev1.ClusterDeployment,
+	acp controlplanev1alpha2.OpenshiftAssistedControlPlane,
+	imageSetName string,
+	cluster *clusterv1.Cluster,
+	workerReplicas int,
+) (*hiveext.AgentClusterInstall, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	clusterNetwork, serviceNetwork := getClusterNetworks(cluster)
+
 	var additionalManifests []hiveext.ManifestsConfigMapReference
 	if len(acp.Spec.Config.ManifestsConfigMapRefs) > 0 {
 		additionalManifests = append(additionalManifests, acp.Spec.Config.ManifestsConfigMapRefs...)
