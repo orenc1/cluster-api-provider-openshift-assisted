@@ -105,20 +105,24 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
+	if err := r.ensureAgentClusterInstall(ctx, clusterDeployment, acp); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment)
 }
 
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
 	oacp controlplanev1alpha2.OpenshiftAssistedControlPlane,
-) (ctrl.Result, error) {
+) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, oacp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "failed to retrieve owner Cluster from the API Server")
-		return ctrl.Result{}, err
+		return err
 	}
 
 	workerNodes := r.getWorkerNodesCount(ctx, cluster)
@@ -171,10 +175,10 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 
 	if _, err = controllerutil.CreateOrUpdate(ctx, r.Client, aci, mutate); err != nil {
 		log.Error(err, "failed to create or update AgentClusterInstall")
-		return ctrl.Result{}, err
+		return err
 	}
 
-	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
+	return nil
 }
 
 // Returns release image from OpenshiftAssistedControlPlane. It will compute it starting from Spec.DistributionVersion and
@@ -210,13 +214,12 @@ func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, c
 func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 	ctx context.Context,
 	cd *hivev1.ClusterDeployment,
-	aci *hiveext.AgentClusterInstall,
 ) error {
 	cd.Spec.ClusterInstallRef = &hivev1.ClusterInstallLocalReference{
 		Group:   hiveext.Group,
 		Version: hiveext.Version,
 		Kind:    "AgentClusterInstall",
-		Name:    aci.Name,
+		Name:    cd.Name,
 	}
 	return r.Client.Update(ctx, cd)
 }
