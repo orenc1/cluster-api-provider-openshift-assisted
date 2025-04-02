@@ -274,15 +274,23 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 		return err
 	}
 
-	spokeImageRegistryConfigmap, err := imageregistry.GenerateImageRegistryConfigmap(registryConfigmap, registryNamespace)
+	spokeImageRegistryData, err := imageregistry.GenerateImageRegistryData(registryConfigmap, registryNamespace)
 	if err != nil {
 		return err
 	}
 
-	if err := util.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap); err != nil {
-		return err
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      imageregistry.ImageConfigMapName,
+			Namespace: registryNamespace,
+		},
 	}
-	return nil
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		cm.Data = spokeImageRegistryData
+		return nil
+	})
+
+	return err
 }
 
 type InstallConfigOverride struct {
