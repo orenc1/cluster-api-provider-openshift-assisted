@@ -89,6 +89,15 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	log.WithValues("openshiftassisted_control_plane", acp.Name, "openshiftassisted_control_plane_namespace", acp.Namespace)
 
+	arch, err := getArchitectureFromBootstrapConfigs(ctx, r.Client, &acp)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err = ensureClusterImageSet(ctx, r.Client, clusterDeployment.Name, getReleaseImage(acp, arch)); err != nil {
+		log.Error(err, "failed creating ClusterImageSet")
+		return ctrl.Result{}, err
+	}
+
 	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
 }
 
@@ -102,15 +111,6 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, oacp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "failed to retrieve owner Cluster from the API Server")
-		return ctrl.Result{}, err
-	}
-
-	arch, err := getArchitectureFromBootstrapConfigs(ctx, r.Client, &oacp)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err = ensureClusterImageSet(ctx, r.Client, clusterDeployment.Name, getReleaseImage(oacp, arch)); err != nil {
-		log.Error(err, "failed creating ClusterImageSet")
 		return ctrl.Result{}, err
 	}
 
