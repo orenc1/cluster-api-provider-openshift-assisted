@@ -98,6 +98,13 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	if acp.Spec.Config.ImageRegistryRef != nil {
+		if err := r.createImageRegistry(ctx, acp.Spec.Config.ImageRegistryRef.Name, acp.Namespace); err != nil {
+			log.Error(err, "failed to create image registry config manifest")
+			return ctrl.Result{}, err
+		}
+	}
+
 	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
 }
 
@@ -210,7 +217,6 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	cluster *clusterv1.Cluster,
 	workerReplicas int,
 ) (*hiveext.AgentClusterInstall, error) {
-	log := ctrl.LoggerFrom(ctx)
 
 	clusterNetwork, serviceNetwork := getClusterNetworks(cluster)
 
@@ -220,10 +226,6 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	}
 
 	if acp.Spec.Config.ImageRegistryRef != nil {
-		if err := r.createImageRegistry(ctx, acp.Spec.Config.ImageRegistryRef.Name, acp.Namespace); err != nil {
-			log.Error(err, "failed to create image registry config manifest")
-			return nil, err
-		}
 		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
 	}
 
