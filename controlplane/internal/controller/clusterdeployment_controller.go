@@ -209,6 +209,19 @@ func getClusterNetworks(cluster *clusterv1.Cluster) ([]hiveext.ClusterNetworkEnt
 	return clusterNetwork, serviceNetwork
 }
 
+func getClusterAdditionalManifestRefs(acp controlplanev1alpha2.OpenshiftAssistedControlPlane) []hiveext.ManifestsConfigMapReference {
+	var additionalManifests []hiveext.ManifestsConfigMapReference
+	if len(acp.Spec.Config.ManifestsConfigMapRefs) > 0 {
+		additionalManifests = append(additionalManifests, acp.Spec.Config.ManifestsConfigMapRefs...)
+	}
+
+	if acp.Spec.Config.ImageRegistryRef != nil {
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
+	}
+
+	return additionalManifests
+}
+
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
@@ -219,15 +232,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 ) (*hiveext.AgentClusterInstall, error) {
 
 	clusterNetwork, serviceNetwork := getClusterNetworks(cluster)
-
-	var additionalManifests []hiveext.ManifestsConfigMapReference
-	if len(acp.Spec.Config.ManifestsConfigMapRefs) > 0 {
-		additionalManifests = append(additionalManifests, acp.Spec.Config.ManifestsConfigMapRefs...)
-	}
-
-	if acp.Spec.Config.ImageRegistryRef != nil {
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
-	}
+	additionalManifests := getClusterAdditionalManifestRefs(acp)
 
 	aci := &hiveext.AgentClusterInstall{
 		ObjectMeta: metav1.ObjectMeta{
