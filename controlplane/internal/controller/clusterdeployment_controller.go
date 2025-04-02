@@ -43,6 +43,7 @@ import (
 	capiutil "sigs.k8s.io/cluster-api/util"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
@@ -108,15 +109,13 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	imageSet := computeClusterImageSet(clusterDeployment.Name, getReleaseImage(oacp, arch))
-	err = util.CreateOrUpdate(ctx, r.Client, imageSet)
-	if err != nil {
+	if err = ensureClusterImageSet(ctx, r.Client, clusterDeployment.Name, getReleaseImage(oacp, arch)); err != nil {
 		log.Error(err, "failed creating ClusterImageSet")
 		return ctrl.Result{}, err
 	}
 
 	workerNodes := r.getWorkerNodesCount(ctx, cluster)
-	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, oacp, imageSet, cluster, workerNodes)
+	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, oacp, clusterDeployment.Name, cluster, workerNodes)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -172,22 +171,26 @@ func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 	return r.Client.Update(ctx, cd)
 }
 
-func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.ClusterImageSet {
-	return &hivev1.ClusterImageSet{
+func ensureClusterImageSet(ctx context.Context, c client.Client, imageSetName string, releaseImage string) error {
+	imageSet := &hivev1.ClusterImageSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: imageSetName,
 		},
-		Spec: hivev1.ClusterImageSetSpec{
-			ReleaseImage: releaseImage,
-		},
 	}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, c, imageSet, func() error {
+		imageSet.Spec.ReleaseImage = releaseImage
+		return nil
+	})
+
+	return err
 }
 
 func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
 	acp controlplanev1alpha2.OpenshiftAssistedControlPlane,
-	imageSet *hivev1.ClusterImageSet,
+	imageSetName string,
 	cluster *clusterv1.Cluster,
 	workerReplicas int,
 ) (*hiveext.AgentClusterInstall, error) {
@@ -239,7 +242,7 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 			MastersSchedulable: acp.Spec.Config.MastersSchedulable,
 			Proxy:              acp.Spec.Config.Proxy,
 			SSHPublicKey:       acp.Spec.Config.SSHAuthorizedKey,
-			ImageSetRef:        &hivev1.ClusterImageSetReference{Name: imageSet.Name},
+			ImageSetRef:        &hivev1.ClusterImageSetReference{Name: imageSetName},
 			Networking: hiveext.Networking{
 				ClusterNetwork: clusterNetwork,
 				ServiceNetwork: serviceNetwork,
