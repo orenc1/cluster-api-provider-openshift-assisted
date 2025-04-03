@@ -23,7 +23,7 @@ def test_version_repository_find_all(versions_file):
     version = versions[0]
 
     assert version.name == "v0.0.1"
-    assert len(version.artifacts) == 7
+    assert len(version.artifacts) == 8
 
     assert version.artifacts[0].repository == "https://github.com/kubernetes-sigs/cluster-api"
     assert version.artifacts[2].image_url.startswith("quay.io/edge-infrastructure/assisted-service")
@@ -35,4 +35,12 @@ def test_invalid_versions_file_schema(tmp_path):
 
     repo = VersionRepository(str(bad_file))
     with pytest.raises(ValueError, match="Invalid versions.yaml structure"):
+        repo.find_all()
+
+
+def test_non_existent_versions_file(tmp_path):
+    non_existent_file = tmp_path / "non_existent.yaml"
+
+    repo = VersionRepository(str(non_existent_file))
+    with pytest.raises(Exception, match="versions.yaml file is required"):
         repo.find_all()

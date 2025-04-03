@@ -10,7 +10,7 @@ class TagReconciliationService(Service):
     def __init__(self, versions_file_path: str, dry_run: bool):
         self.github: GitHubClient = GitHubClient()
         self.versions_repo: VersionRepository = VersionRepository(versions_file_path)
-        self.logger: logging.Logger = setup_logger("TagReconcilerService")
+        self.logger: logging.Logger = setup_logger("TagReconciliationService")
         self.dry_run: bool = dry_run
 
     @override

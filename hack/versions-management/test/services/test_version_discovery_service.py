@@ -116,6 +116,7 @@ def test_discovery_success(mock_github, mock_registry, mock_rc_repo, temp_snapsh
     def registry_exists_side_effect(image, tag):
         valid_combinations = [
             ("quay.io/edge-infrastructure/assisted-service", "latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca"),
+            ("quay.io/edge-infrastructure/assisted-service-el8", "latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca"),
             ("quay.io/edge-infrastructure/assisted-image-service", "latest-2249c85d05600191b24e93dd92e733d49a1180ec"),
             ("quay.io/edge-infrastructure/assisted-installer-agent", "latest-cfe93a9779dea6ad2a628280b40071d23f3cb429"),
             ("quay.io/edge-infrastructure/assisted-installer-controller", "latest-c389a38405383961d26191799161c86127451635"),
@@ -123,7 +124,19 @@ def test_discovery_success(mock_github, mock_registry, mock_rc_repo, temp_snapsh
         ]
         return (image, tag) in valid_combinations
     
+    def resolve_digest_side_effect(image, tag):
+        valid_combinations = {
+            ("quay.io/edge-infrastructure/assisted-service", "latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca"): "digest1",
+            ("quay.io/edge-infrastructure/assisted-service-el8", "latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca"): "digest2",
+            ("quay.io/edge-infrastructure/assisted-image-service", "latest-2249c85d05600191b24e93dd92e733d49a1180ec"): "digest3",
+            ("quay.io/edge-infrastructure/assisted-installer-agent", "latest-cfe93a9779dea6ad2a628280b40071d23f3cb429"): "digest4",
+            ("quay.io/edge-infrastructure/assisted-installer-controller", "latest-c389a38405383961d26191799161c86127451635"): "digest5",
+            ("quay.io/edge-infrastructure/assisted-installer", "latest-c389a38405383961d26191799161c86127451635"): "digest6",
+        }
+        return valid_combinations[(image, tag)]
+
     mock_registry.exists.side_effect = registry_exists_side_effect
+    mock_registry.resolve_digest.side_effect = resolve_digest_side_effect
     
     svc.run()
     
@@ -133,34 +146,55 @@ def test_discovery_success(mock_github, mock_registry, mock_rc_repo, temp_snapsh
     assert snapshot.metadata.status == "pending"
     assert snapshot.metadata.generated_at == mock_datetime
     
-    assert len(snapshot.artifacts) == 7
+    assert len(snapshot.artifacts) == 8
     
     assert snapshot.artifacts[0].repository == "https://github.com/kubernetes-sigs/cluster-api"
     assert snapshot.artifacts[0].ref == "v1.9.5"
     assert snapshot.artifacts[0].image_url is None
+    assert snapshot.artifacts[0].versioning_selection_mechanism == "release"
+    assert snapshot.artifacts[0].name == "kubernetes-sigs/cluster-api"
     
     assert snapshot.artifacts[1].repository == "https://github.com/metal3-io/cluster-api-provider-metal3"
     assert snapshot.artifacts[1].ref == "v1.9.3"
     assert snapshot.artifacts[1].image_url is None
+    assert snapshot.artifacts[1].versioning_selection_mechanism == "release"
+    assert snapshot.artifacts[1].name == "metal3-io/cluster-api-provider-metal3"
     
     assert snapshot.artifacts[2].repository == "https://github.com/openshift/assisted-service"
     assert snapshot.artifacts[2].ref == "76d29d2a7f0899dcede9700fc88fcbad37b6ccca"
-    assert snapshot.artifacts[2].image_url == "quay.io/edge-infrastructure/assisted-service:latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca"
+    assert snapshot.artifacts[2].image_url == "quay.io/edge-infrastructure/assisted-service@digest1"
+    assert snapshot.artifacts[2].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[2].name == "openshift/assisted-service"
+
+    assert snapshot.artifacts[3].repository == "https://github.com/openshift/assisted-service"
+    assert snapshot.artifacts[3].ref == "76d29d2a7f0899dcede9700fc88fcbad37b6ccca"
+    assert snapshot.artifacts[3].image_url == "quay.io/edge-infrastructure/assisted-service-el8@digest2"
+    assert snapshot.artifacts[3].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[3].name == "openshift/assisted-service-el8"
     
-    assert snapshot.artifacts[3].repository == "https://github.com/openshift/assisted-image-service"
-    assert snapshot.artifacts[3].ref == "2249c85d05600191b24e93dd92e733d49a1180ec"
-    assert snapshot.artifacts[3].image_url == "quay.io/edge-infrastructure/assisted-image-service:latest-2249c85d05600191b24e93dd92e733d49a1180ec"
+    assert snapshot.artifacts[4].repository == "https://github.com/openshift/assisted-image-service"
+    assert snapshot.artifacts[4].ref == "2249c85d05600191b24e93dd92e733d49a1180ec"
+    assert snapshot.artifacts[4].image_url == "quay.io/edge-infrastructure/assisted-image-service@digest3"
+    assert snapshot.artifacts[4].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[4].name == "openshift/assisted-image-service"
     
-    assert snapshot.artifacts[4].repository == "https://github.com/openshift/assisted-installer-agent"
-    assert snapshot.artifacts[4].ref == "cfe93a9779dea6ad2a628280b40071d23f3cb429"
-    assert snapshot.artifacts[4].image_url == "quay.io/edge-infrastructure/assisted-installer-agent:latest-cfe93a9779dea6ad2a628280b40071d23f3cb429"
+    assert snapshot.artifacts[5].repository == "https://github.com/openshift/assisted-installer-agent"
+    assert snapshot.artifacts[5].ref == "cfe93a9779dea6ad2a628280b40071d23f3cb429"
+    assert snapshot.artifacts[5].image_url == "quay.io/edge-infrastructure/assisted-installer-agent@digest4"
+    assert snapshot.artifacts[5].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[5].name == "openshift/assisted-installer-agent"
+
+    assert snapshot.artifacts[6].repository == "https://github.com/openshift/assisted-installer"
+    assert snapshot.artifacts[6].ref == "c389a38405383961d26191799161c86127451635"
+    assert snapshot.artifacts[6].image_url == "quay.io/edge-infrastructure/assisted-installer@digest6"
+    assert snapshot.artifacts[6].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[6].name == "openshift/assisted-installer"
     
-    installer_components = [c for c in snapshot.artifacts if c.repository == "https://github.com/openshift/assisted-installer"]
-    assert len(installer_components) == 2
-    
-    installer_image_urls = [c.image_url for c in installer_components]
-    assert "quay.io/edge-infrastructure/assisted-installer-controller:latest-c389a38405383961d26191799161c86127451635" in installer_image_urls
-    assert "quay.io/edge-infrastructure/assisted-installer:latest-c389a38405383961d26191799161c86127451635" in installer_image_urls
+    assert snapshot.artifacts[7].repository == "https://github.com/openshift/assisted-installer"
+    assert snapshot.artifacts[7].ref == "c389a38405383961d26191799161c86127451635"
+    assert snapshot.artifacts[7].image_url == "quay.io/edge-infrastructure/assisted-installer-controller@digest5"
+    assert snapshot.artifacts[7].versioning_selection_mechanism == "commit"
+    assert snapshot.artifacts[7].name == "openshift/assisted-installer-controller"
 
 def test_discovery_no_components_found(mock_github, mock_rc_repo, temp_snapshot_file, temp_components_file):
     service = VersionDiscoveryService(temp_snapshot_file, temp_components_file)

@@ -9,7 +9,7 @@ resources:
 images:
   - name: quay.io/edge-infrastructure/assisted-service
     newName: quay.io/edge-infrastructure/assisted-service
-    digest: {{ ASSISTED_SERVICE_IMAGE }}
+    digest: {{ assisted_service_image }}
 
 patches:
   - target:
@@ -21,25 +21,25 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/env/0/value
-        value: {{ ASSISTED_SERVICE_IMAGE }}
+        value: {{ assisted_service_image }}
       - op: replace
         path: /spec/template/spec/containers/0/env/1/value
-        value: quay.io/edge-infrastructure/assisted-service-el8@sha256:bb487fc7121a26be374792ccb6eeed7ac8a521fa78876eec87807a5da7da5121
+        value: {{ assisted_service_el8_image }}
       - op: replace
         path: /spec/template/spec/containers/0/env/2/value
-        value: {{ ASSISTED_IMAGE_SERVICE_IMAGE }}
+        value: {{ assisted_image_service_image }}
       - op: replace
         path: /spec/template/spec/containers/0/env/3/value
         value: quay.io/sclorg/postgresql-12-c8s@sha256:663089471e999a4175341ac4d97dcff9cd15ec5f2e96b2309dc8de806106198b
       - op: replace
         path: /spec/template/spec/containers/0/env/4/value
-        value: {{ ASSISTED_INSTALLER_AGENT_IMAGE }}
+        value: {{ assisted_installer_agent_image }}
       - op: replace
         path: /spec/template/spec/containers/0/env/5/value
-        value: {{ ASSISTED_INSTALLER_CONTROLLER_IMAGE }}
+        value: {{ assisted_installer_controller_image }}
       - op: replace
         path: /spec/template/spec/containers/0/env/6/value
-        value: {{ ASSISTED_INSTALLER_IMAGE }}
+        value: {{ assisted_installer_image }}
 
   - target:
       version: v1
@@ -51,4 +51,4 @@ patches:
 
 labels:
   - pairs:
-      clusterctl.cluster.x-k8s.io: "apiVersion: kustomize.config.k8s.io/v1beta1"
+      clusterctl.cluster.x-k8s.io: ""

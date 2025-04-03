@@ -31,14 +31,15 @@ def test_release_repository_find_all(snapshots_file):
     assert snapshot.metadata.status == "pending"
     assert snapshot.metadata.generated_at == datetime.fromisoformat("2025-03-10T10:32:04.642635")
 
-    assert len(snapshot.artifacts) == 7
+    assert len(snapshot.artifacts) == 8
     assert snapshot.artifacts[0].repository == "https://github.com/kubernetes-sigs/cluster-api"
     assert snapshot.artifacts[1].repository == "https://github.com/metal3-io/cluster-api-provider-metal3"
     assert snapshot.artifacts[2].repository == "https://github.com/openshift/assisted-service"
-    assert snapshot.artifacts[3].repository == "https://github.com/openshift/assisted-image-service"
-    assert snapshot.artifacts[4].repository == "https://github.com/openshift/assisted-installer-agent"
-    assert snapshot.artifacts[5].repository == "https://github.com/openshift/assisted-installer"
+    assert snapshot.artifacts[3].repository == "https://github.com/openshift/assisted-service"
+    assert snapshot.artifacts[4].repository == "https://github.com/openshift/assisted-image-service"
+    assert snapshot.artifacts[5].repository == "https://github.com/openshift/assisted-installer-agent"
     assert snapshot.artifacts[6].repository == "https://github.com/openshift/assisted-installer"
+    assert snapshot.artifacts[7].repository == "https://github.com/openshift/assisted-installer"
 
 
 def test_release_repository_find_by_id(snapshots_file):

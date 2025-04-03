@@ -107,35 +107,42 @@ def service_with_pending(snapshots_file):
                         ref="ref",
                         name="openshift/assisted-service",
                         versioning_selection_mechanism="commit",
-                        image_url="quay.io/edge-infrastructure/assisted-service:latest-tag"
+                        image_url="quay.io/edge-infrastructure/assisted-service@sha256:latestref"
+                    ),
+                    Artifact(
+                        repository="https://github.com/openshift/assisted-service",
+                        ref="ref",
+                        name="openshift/assisted-service-el8",
+                        versioning_selection_mechanism="commit",
+                        image_url="quay.io/edge-infrastructure/assisted-service-el8@sha256:latestref"
                     ),
                     Artifact(
                         repository="https://github.com/openshift/assisted-image-service",
                         ref="ref",
                         name="openshift/assisted-image-service",
                         versioning_selection_mechanism="commit",
-                        image_url="quay.io/edge-infrastructure/assisted-image-service:latest-tag"
+                        image_url="quay.io/edge-infrastructure/assisted-image-service@sha256:latestref"
                     ),
                     Artifact(
                         repository="https://github.com/openshift/assisted-installer-agent",
                         ref="ref",
                         name="openshift/assisted-installer-agent",
                         versioning_selection_mechanism="commit",
-                        image_url="quay.io/edge-infrastructure/assisted-installer-agent:latest-tag"
+                        image_url="quay.io/edge-infrastructure/assisted-installer-agent@sha256:latestref"
                     ),
                     Artifact(
                         repository="https://github.com/openshift/assisted-installer",
                         ref="ref",
                         name="openshift/assisted-installer-controller",
                         versioning_selection_mechanism="commit",
-                        image_url="quay.io/edge-infrastructure/assisted-installer-controller:latest-tag"
+                        image_url="quay.io/edge-infrastructure/assisted-installer-controller@sha256:latestref"
                     ),
                     Artifact(
                         repository="https://github.com/openshift/assisted-installer",
                         ref="ref",
                         name="openshift/assisted-installer",
                         versioning_selection_mechanism="commit",
-                        image_url="quay.io/edge-infrastructure/assisted-installer:latest-tag"
+                        image_url="quay.io/edge-infrastructure/assisted-installer@sha256:latestref"
                     )
                 ]
             )
@@ -156,11 +163,12 @@ def test_export_env_variables(service_with_pending):
         
         assert os.environ.get("CAPI_VERSION") == "ref"
         assert os.environ.get("CAPM3_VERSION") == "ref"
-        assert os.environ.get("ASSISTED_SERVICE_IMAGE") == "quay.io/edge-infrastructure/assisted-service:latest-tag"
-        assert os.environ.get("ASSISTED_IMAGE_SERVICE_IMAGE") == "quay.io/edge-infrastructure/assisted-image-service:latest-tag"
-        assert os.environ.get("ASSISTED_INSTALLER_AGENT_IMAGE") == "quay.io/edge-infrastructure/assisted-installer-agent:latest-tag"
-        assert os.environ.get("ASSISTED_INSTALLER_CONTROLLER_IMAGE") == "quay.io/edge-infrastructure/assisted-installer-controller:latest-tag"
-        assert os.environ.get("ASSISTED_INSTALLER_IMAGE") == "quay.io/edge-infrastructure/assisted-installer:latest-tag"
+        assert os.environ.get("ASSISTED_SERVICE_IMAGE") == "quay.io/edge-infrastructure/assisted-service@sha256:latestref"
+        assert os.environ.get("ASSISTED_SERVICE_EL8_IMAGE") == "quay.io/edge-infrastructure/assisted-service-el8@sha256:latestref"
+        assert os.environ.get("ASSISTED_IMAGE_SERVICE_IMAGE") == "quay.io/edge-infrastructure/assisted-image-service@sha256:latestref"
+        assert os.environ.get("ASSISTED_INSTALLER_AGENT_IMAGE") == "quay.io/edge-infrastructure/assisted-installer-agent@sha256:latestref"
+        assert os.environ.get("ASSISTED_INSTALLER_CONTROLLER_IMAGE") == "quay.io/edge-infrastructure/assisted-installer-controller@sha256:latestref"
+        assert os.environ.get("ASSISTED_INSTALLER_IMAGE") == "quay.io/edge-infrastructure/assisted-installer@sha256:latestref"
 
 
 def test_successful_test_run(service_with_pending):
@@ -168,14 +176,14 @@ def test_successful_test_run(service_with_pending):
     
     # Verify playbook was run
     service_with_pending.ansible.run_playbook.assert_called_with(
-        "test/ansible/run_test.yaml", "test/ansible/inventory.yaml"
+        "test/playbooks/run_test.yaml", "test/playbooks/inventories/remote_host.yaml"
     )
     
     # Verify snapshot was updated
     assert service_with_pending.repo.update.call_count == 1
     updated_snapshot = service_with_pending.repo.update.call_args[0][0]
     assert updated_snapshot.metadata.status == "successful"
-    assert len(updated_snapshot.artifacts) == 7
+    assert len(updated_snapshot.artifacts) == 8
 
 
 def test_failed_test_run(service_with_pending):

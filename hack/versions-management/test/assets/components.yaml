@@ -11,6 +11,10 @@ components:
     name: openshift/assisted-service
     image_pattern: quay.io/edge-infrastructure/assisted-service
     versioning_selection_mechanism: commit
+  - repository: https://github.com/openshift/assisted-service
+    name: openshift/assisted-service-el8
+    image_pattern: quay.io/edge-infrastructure/assisted-service-el8
+    versioning_selection_mechanism: commit
   - repository: https://github.com/openshift/assisted-image-service
     name: openshift/assisted-image-service
     image_pattern: quay.io/edge-infrastructure/assisted-image-service

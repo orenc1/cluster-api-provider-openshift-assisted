@@ -1,7 +1,6 @@
 import hashlib
 import logging
 from datetime import datetime
-from os import name
 from typing import override
 from concurrent.futures import ThreadPoolExecutor
 
@@ -75,20 +74,20 @@ class VersionDiscoveryService(Service):
                         name=component.name,
                         image_url=None,
                     )
-            elif component.versioning_selection_mechanism == "commit":
+            elif component.versioning_selection_mechanism == "commit" and img_pattern:
                 self.logger.info(f"Checking commits of component {component.name}")
                 for commit in gh_repo.get_commits()[:20]:
                     sha = commit.sha
                     tag = f"latest-{sha}"
-                    img = f"{img_pattern}"
-                    if self.registry.exists(img, tag):
+                    if self.registry.exists(img_pattern, tag):
+                        digest = self.registry.resolve_digest(img_pattern, tag)
                         self.logger.info(f"Found commit {sha} for repository {repo}")
                         return Artifact(
                             repository=f"https://github.com/{repo}",
                             ref=sha,
                             versioning_selection_mechanism=component.versioning_selection_mechanism,
                             name=component.name,
-                            image_url=f"{img}:{tag}",
+                            image_url=f"{img_pattern}@{digest}",
                         )
             else:
                 raise Exception(f"Versioning mechanism of component {component.repository} is not supported")

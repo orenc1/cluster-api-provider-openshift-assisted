@@ -9,6 +9,7 @@
     cluster_topology: "{{ lookup('ansible.builtin.env', 'CLUSTER_TOPOLOGY', default='multinode') }}"
     example_manifest: "{{ cluster_topology }}-example.yaml.j2"
     default_assisted_service_image: "quay.io/edge-infrastructure/assisted-service@sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
+    default_assisted_service_el8_image: "quay.io/edge-infrastructure/assisted-service-el8@sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
     default_assisted_image_service_image: "quay.io/edge-infrastructure/assisted-image-service@sha256:007f0b23d6e3f52837f44d3b4f02565e0121967e8b64e75dc38ba1b1d48e58c2"
     default_assisted_installer_agent_image: "quay.io/edge-infrastructure/assisted-installer-agent@sha256:b9cf4a9246eb3eb2d71dc17f6034c875be9c7d63120fa5a683b975dd878e6b20"
     default_assisted_installer_controller_image: "quay.io/edge-infrastructure/assisted-installer-controller@sha256:6fd6d481b66b78853214fbce28acbd45fd9345480c70b8775078ce44ba3d2ab8"

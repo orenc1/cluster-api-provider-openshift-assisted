@@ -2,7 +2,6 @@ import logging
 import os
 from dataclasses import replace
 from typing import override
-from zlib import compressobj
 
 from core.clients.ansible_client import AnsibleClient
 from core.models import Snapshot
@@ -29,7 +28,7 @@ class AnsibleTestRunnerService(Service):
         self.export_env(pending_snapshot)
 
         try:
-            self.ansible.run_playbook("test/ansible/run_test.yaml", "test/ansible/inventory.yaml")
+            self.ansible.run_playbook("test/playbooks/run_test.yaml", "test/playbooks/inventories/remote_host.yaml")
             updated = replace(pending_snapshot.metadata, status="successful")
         except Exception:
             updated = replace(pending_snapshot.metadata, status="failed")
@@ -42,6 +41,7 @@ class AnsibleTestRunnerService(Service):
             "kubernetes-sigs/cluster-api": "CAPI_VERSION",
             "metal3-io/cluster-api-provider-metal3": "CAPM3_VERSION",
             "quay.io/edge-infrastructure/assisted-service": "ASSISTED_SERVICE_IMAGE",
+            "quay.io/edge-infrastructure/assisted-service-el8": "ASSISTED_SERVICE_EL8_IMAGE",
             "quay.io/edge-infrastructure/assisted-image-service": "ASSISTED_IMAGE_SERVICE_IMAGE",
             "quay.io/edge-infrastructure/assisted-installer-agent": "ASSISTED_INSTALLER_AGENT_IMAGE",
             "quay.io/edge-infrastructure/assisted-installer-controller": "ASSISTED_INSTALLER_CONTROLLER_IMAGE",
@@ -56,10 +56,12 @@ class AnsibleTestRunnerService(Service):
                         os.environ[env_key] = comp.ref
                         self.logger.info(f"Exported {env_key}={comp.ref}")
                 case "commit":
-                    image_key = comp.image_url.split(":")[0]
+                    image_key = comp.image_url.split("@")[0]
                     env_key = name_map.get(image_key)
                     if env_key:
                         os.environ[env_key] = comp.image_url
                         self.logger.info(f"Exported {env_key}={comp.image_url}")
+                    else:
+                        self.logger.warning(f"No environment variable mapping found for {comp.name}")
                 case _:
-                    raise Exception("Unsupported versioning selection mechanism")
+                    raise Exception(f"Unsupported versioning selection mechanism: {comp.versioning_selection_mechanism}") 

@@ -11,7 +11,7 @@ class VersionRepository:
 
     def find_all(self) -> list[Version]:
         if not os.path.isfile(self.file_path):
-            return []
+            raise Exception("versions.yaml file is required")
         with open(self.file_path, "r") as f:
             data = self.yaml.load(f)
             try:

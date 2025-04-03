@@ -19,6 +19,11 @@ snapshots:
         name: openshift/assisted-service
         versioning_selection_mechanism: commit
         image_url: quay.io/edge-infrastructure/assisted-service:latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca
+      - repository: https://github.com/openshift/assisted-service
+        ref: 76d29d2a7f0899dcede9700fc88fcbad37b6ccca
+        name: openshift/assisted-service-el8
+        versioning_selection_mechanism: commit
+        image_url: quay.io/edge-infrastructure/assisted-service-el8:latest-76d29d2a7f0899dcede9700fc88fcbad37b6ccca
       - repository: https://github.com/openshift/assisted-image-service
         ref: 2249c85d05600191b24e93dd92e733d49a1180ec
         name: openshift/assisted-image-service

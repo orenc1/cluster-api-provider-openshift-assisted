@@ -120,15 +120,17 @@
     mode: '0644'
 
 - name: prepare infrastructure-operator on target
+  delegate_to: localhost
   ansible.builtin.template:
-    src: "{{ src_dir }}/test/e2e/manifests/infrastructure-operator/kustomization.yaml.j2"
-    dest: "{{ src_dir }}/test/e2e/manifests/infrastructure-operator/kustomization.yaml"
+    src: "{{ playbook_dir }}/../../test/e2e/manifests/infrastructure-operator/kustomization.yaml.j2"
+    dest: "{{ playbook_dir }}/../../test/e2e/manifests/infrastructure-operator/kustomization.yaml"
   vars:
-    ASSISTED_SERVICE_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_IMAGE', default=default_assisted_service_image) }}"
-    ASSISTED_IMAGE_SERVICE_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_IMAGE_SERVICE_IMAGE', default=default_assisted_image_service_image) }}"
-    ASSISTED_INSTALLER_AGENT_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_AGENT_IMAGE', default=default_assisted_installer_agent_image) }}"
-    ASSISTED_INSTALLER_CONTROLLER_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_CONTROLLER_IMAGE', default=default_assisted_installer_controller_image) }}"
-    ASSISTED_INSTALLER_IMAGE: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_IMAGE', default=default_assisted_installer_image) }}"
+    assisted_service_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_IMAGE', default=default_assisted_service_image) }}"
+    assisted_service_el8_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_EL8_IMAGE', default=default_assisted_service_el8_image) }}"
+    assisted_image_service_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_IMAGE_SERVICE_IMAGE', default=default_assisted_image_service_image) }}"
+    assisted_installer_agent_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_AGENT_IMAGE', default=default_assisted_installer_agent_image) }}"
+    assisted_installer_controller_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_CONTROLLER_IMAGE', default=default_assisted_installer_controller_image) }}"
+    assisted_installer_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_IMAGE', default=default_assisted_installer_image) }}"
 
 - name: Deploy infrastructure operator
   kubernetes.core.k8s:
