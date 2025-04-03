@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-
 	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
 	corev1 "k8s.io/api/core/v1"
@@ -116,21 +114,4 @@ func GetWorkloadKubeconfig(
 		return nil, err
 	}
 	return kubeconfig, nil
-}
-
-// Create or update object
-func CreateOrUpdate(
-	ctx context.Context,
-	c client.Client,
-	obj client.Object,
-) error {
-	original := obj.DeepCopyObject().(client.Object)
-	key := client.ObjectKeyFromObject(obj)
-	if err := c.Get(ctx, key, obj); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-		return c.Create(ctx, original)
-	}
-	return c.Update(ctx, original)
 }
