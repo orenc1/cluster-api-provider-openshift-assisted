@@ -524,7 +524,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensureClusterDeployment(
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cd, func() error {
+	_, err := controllerutil.CreateOrPatch(ctx, r.Client, cd, func() error {
 		if err := controllerutil.SetOwnerReference(acp, cd, r.Scheme); err != nil {
 			return err
 		}

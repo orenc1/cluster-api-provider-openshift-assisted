@@ -173,7 +173,7 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		return nil
 	}
 
-	if _, err = controllerutil.CreateOrUpdate(ctx, r.Client, aci, mutate); err != nil {
+	if _, err = controllerutil.CreateOrPatch(ctx, r.Client, aci, mutate); err != nil {
 		log.Error(err, "failed to create or update AgentClusterInstall")
 		return err
 	}
@@ -231,7 +231,7 @@ func ensureClusterImageSet(ctx context.Context, c client.Client, imageSetName st
 		},
 	}
 
-	_, err := controllerutil.CreateOrUpdate(ctx, c, imageSet, func() error {
+	_, err := controllerutil.CreateOrPatch(ctx, c, imageSet, func() error {
 		imageSet.Spec.ReleaseImage = releaseImage
 		return nil
 	})
@@ -285,7 +285,7 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 			Namespace: registryNamespace,
 		},
 	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+	_, err = controllerutil.CreateOrPatch(ctx, r.Client, cm, func() error {
 		cm.Data = spokeImageRegistryData
 		return nil
 	})
