@@ -42,7 +42,7 @@ var _ = BeforeSuite(func() {
 })
 
 var _ = Describe("ImageRegistry Test", func() {
-	Context("GenerateImageRegistryConfigmap", func() {
+	Context("GenerateImageRegistryData", func() {
 		var (
 			mockCtrl *gomock.Controller
 		)
@@ -57,13 +57,13 @@ var _ = Describe("ImageRegistry Test", func() {
 
 		When("the user-provided image registry ConfigMap contains correct data", func() {
 			It("successfully creates the image registry configmap for the spoke cluster", func() {
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					newUserProvidedRegistryCM(getSecureRegistryToml(), certificate),
 					testNamespace,
 				)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(imageRegistryConfigMap).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(BeNil())
 
 				expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 				expectedClusterImage := getImageConfigString(registryCertConfigMapName, []string{})
@@ -74,26 +74,26 @@ var _ = Describe("ImageRegistry Test", func() {
 				)
 
 				By("Checking the ConfigMap contains the correct data")
-				Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-				Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageTagMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageDigestMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
-				Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
-				Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
+				Expect(imageRegistryData).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(HaveKey(imageTagMirrorSetKey))
+				Expect(imageRegistryData).To(HaveKey(imageDigestMirrorSetKey))
+				Expect(imageRegistryData[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
+				Expect(imageRegistryData).To(HaveKey(registryCertConfigMapKey))
+				Expect(imageRegistryData[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
+				Expect(imageRegistryData).To(HaveKey(imageConfigKey))
+				Expect(imageRegistryData[imageConfigKey]).To(Equal(expectedClusterImage))
 			})
 		})
 
 		When("the user-provided image registry ConfigMap contains an insecure registry", func() {
 			It("successfully creates the image registry configmap with the insecure registry", func() {
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					newUserProvidedRegistryCM(getInsecureRegistryToml(), certificate),
 					testNamespace,
 				)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(imageRegistryConfigMap).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(BeNil())
 
 				insecureRegistries := []string{mirrorRegistry}
 				expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
@@ -105,14 +105,14 @@ var _ = Describe("ImageRegistry Test", func() {
 				)
 
 				By("Checking the ConfigMap contains the correct data")
-				Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-				Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageTagMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageDigestMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
-				Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
-				Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
+				Expect(imageRegistryData).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(HaveKey(imageTagMirrorSetKey))
+				Expect(imageRegistryData).To(HaveKey(imageDigestMirrorSetKey))
+				Expect(imageRegistryData[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
+				Expect(imageRegistryData).To(HaveKey(registryCertConfigMapKey))
+				Expect(imageRegistryData[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
+				Expect(imageRegistryData).To(HaveKey(imageConfigKey))
+				Expect(imageRegistryData[imageConfigKey]).To(Equal(expectedClusterImage))
 			})
 		})
 
@@ -120,13 +120,13 @@ var _ = Describe("ImageRegistry Test", func() {
 			It("successfully creates the image registry configmap that pulls by tag", func() {
 				userRegistryCM := newUserProvidedRegistryCM(getSecureRegistryTagOnlyToml(), certificate)
 
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					userRegistryCM,
 					testNamespace,
 				)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(imageRegistryConfigMap).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(BeNil())
 
 				expectedImageTagMirrorSet := getImagTagMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 				expectedClusterImage := getImageConfigString(registryCertConfigMapName, []string{})
@@ -137,14 +137,14 @@ var _ = Describe("ImageRegistry Test", func() {
 				)
 
 				By("Checking the ConfigMap contains the correct data")
-				Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-				Expect(imageRegistryConfigMap.Data).NotTo(HaveKey(imageDigestMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageTagMirrorSetKey))
-				Expect(imageRegistryConfigMap.Data[imageTagMirrorSetKey]).To(Equal(expectedImageTagMirrorSet))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(registryCertConfigMapKey))
-				Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
-				Expect(imageRegistryConfigMap.Data).To(HaveKey(imageConfigKey))
-				Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(Equal(expectedClusterImage))
+				Expect(imageRegistryData).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(HaveKey(imageDigestMirrorSetKey))
+				Expect(imageRegistryData).To(HaveKey(imageTagMirrorSetKey))
+				Expect(imageRegistryData[imageTagMirrorSetKey]).To(Equal(expectedImageTagMirrorSet))
+				Expect(imageRegistryData).To(HaveKey(registryCertConfigMapKey))
+				Expect(imageRegistryData[registryCertConfigMapKey]).To(Equal(expectedCertificateCM))
+				Expect(imageRegistryData).To(HaveKey(imageConfigKey))
+				Expect(imageRegistryData[imageConfigKey]).To(Equal(expectedClusterImage))
 			})
 		})
 
@@ -152,46 +152,46 @@ var _ = Describe("ImageRegistry Test", func() {
 			It("successfully creates the image registry configmap for the spoke cluster", func() {
 				userRegistryCM := newUserProvidedRegistryCM(getSecureRegistryToml(), "")
 
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					userRegistryCM,
 					testNamespace,
 				)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(imageRegistryConfigMap).NotTo(BeNil())
+				Expect(imageRegistryData).NotTo(BeNil())
 
 				expectedImageDigestMirrorSet := getImageDigestMirrorSetString(sourceRegistry, []string{mirrorRegistry})
 
 				By("Checking the ConfigMap contains the correct data")
-				Expect(imageRegistryConfigMap.Data).NotTo(BeNil())
-				Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).NotTo(BeNil())
-				Expect(imageRegistryConfigMap.Data[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
-				Expect(imageRegistryConfigMap.Data[registryCertConfigMapKey]).To(BeEmpty())
-				Expect(imageRegistryConfigMap.Data[imageConfigKey]).To(BeEmpty())
+				Expect(imageRegistryData).NotTo(BeNil())
+				Expect(imageRegistryData[imageDigestMirrorSetKey]).NotTo(BeNil())
+				Expect(imageRegistryData[imageDigestMirrorSetKey]).To(Equal(expectedImageDigestMirrorSet))
+				Expect(imageRegistryData[registryCertConfigMapKey]).To(BeEmpty())
+				Expect(imageRegistryData[imageConfigKey]).To(BeEmpty())
 			})
 		})
 
 		When("the user-provided image registry ConfigMap is missing the source in the registries.conf", func() {
 			It("fails to create the image registry configmap", func() {
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					newUserProvidedRegistryCM(getRegistryMissingSourceToml(), ""),
 					testNamespace,
 				)
 				Expect(err).To(HaveOccurred())
-				Expect(imageRegistryConfigMap).To(BeNil())
+				Expect(imageRegistryData).To(BeNil())
 			})
 		})
 
 		When("the user-provided image registry ConfigMap is missing the mirror in the registries.conf", func() {
 			It("fails to create the image registry configmap", func() {
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					newUserProvidedRegistryCM(getRegistryMissingMirrorToml(), certificate),
 					testNamespace,
 				)
 				Expect(err).To(HaveOccurred())
-				Expect(imageRegistryConfigMap).To(BeNil())
+				Expect(imageRegistryData).To(BeNil())
 			})
 		})
 
@@ -199,13 +199,13 @@ var _ = Describe("ImageRegistry Test", func() {
 			It("fails to create the image registry configmap", func() {
 				userRegistryCM := newUserProvidedRegistryCM(fmt.Sprintf("location=%s", sourceRegistry), certificate)
 
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					userRegistryCM,
 					testNamespace,
 				)
 				Expect(err).To(HaveOccurred())
-				Expect(imageRegistryConfigMap).To(BeNil())
+				Expect(imageRegistryData).To(BeNil())
 			})
 		})
 
@@ -213,28 +213,28 @@ var _ = Describe("ImageRegistry Test", func() {
 			It("fails to create the image registry configmap", func() {
 				userRegistryCM := newUserProvidedRegistryCM("", certificate)
 
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					userRegistryCM,
 					testNamespace,
 				)
 				Expect(err).To(HaveOccurred())
-				Expect(imageRegistryConfigMap).To(BeNil())
+				Expect(imageRegistryData).To(BeNil())
 			})
 		})
 
 		When("the user-provided image registry ConfigMap has an invalid toml configuration", func() {
 			It("returns parsing error and fails to create configmap", func() {
 				userRegistryCM := newUserProvidedRegistryCM(getInvalidRegistryToml(), certificate)
-				By("Calling the GenerateImageRegistryConfigmap function")
-				imageRegistryConfigMap, err := GenerateImageRegistryConfigmap(
+				By("Calling the GenerateImageRegistryData function")
+				imageRegistryData, err := GenerateImageRegistryData(
 					userRegistryCM,
 					testNamespace,
 				)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(Equal(
 					"failed to load value of registries.conf into toml tree; incorrectly formatted toml: (6, 13): cannot have two dots in one float"))
-				Expect(imageRegistryConfigMap).To(BeNil())
+				Expect(imageRegistryData).To(BeNil())
 			})
 		})
 

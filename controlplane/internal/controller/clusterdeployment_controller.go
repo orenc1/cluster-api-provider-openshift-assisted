@@ -43,6 +43,7 @@ import (
 	capiutil "sigs.k8s.io/cluster-api/util"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
@@ -88,44 +89,94 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	log.WithValues("openshiftassisted_control_plane", acp.Name, "openshiftassisted_control_plane_namespace", acp.Namespace)
 
-	return r.ensureAgentClusterInstall(ctx, clusterDeployment, acp)
+	arch, err := getArchitectureFromBootstrapConfigs(ctx, r.Client, &acp)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err = ensureClusterImageSet(ctx, r.Client, clusterDeployment.Name, getReleaseImage(acp, arch)); err != nil {
+		log.Error(err, "failed creating ClusterImageSet")
+		return ctrl.Result{}, err
+	}
+
+	if acp.Spec.Config.ImageRegistryRef != nil {
+		if err := r.createImageRegistry(ctx, acp.Spec.Config.ImageRegistryRef.Name, acp.Namespace); err != nil {
+			log.Error(err, "failed to create image registry config manifest")
+			return ctrl.Result{}, err
+		}
+	}
+
+	if err := r.ensureAgentClusterInstall(ctx, clusterDeployment, acp); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment)
 }
 
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	ctx context.Context,
 	clusterDeployment *hivev1.ClusterDeployment,
 	oacp controlplanev1alpha2.OpenshiftAssistedControlPlane,
-) (ctrl.Result, error) {
+) error {
 	log := ctrl.LoggerFrom(ctx)
 
 	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, oacp.ObjectMeta)
 	if err != nil {
 		log.Error(err, "failed to retrieve owner Cluster from the API Server")
-		return ctrl.Result{}, err
-	}
-
-	arch, err := getArchitectureFromBootstrapConfigs(ctx, r.Client, &oacp)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	imageSet := computeClusterImageSet(clusterDeployment.Name, getReleaseImage(oacp, arch))
-	err = util.CreateOrUpdate(ctx, r.Client, imageSet)
-	if err != nil {
-		log.Error(err, "failed creating ClusterImageSet")
-		return ctrl.Result{}, err
+		return err
 	}
 
 	workerNodes := r.getWorkerNodesCount(ctx, cluster)
-	aci, err := r.computeAgentClusterInstall(ctx, clusterDeployment, oacp, imageSet, cluster, workerNodes)
-	if err != nil {
-		return ctrl.Result{}, err
+	clusterNetwork, serviceNetwork := getClusterNetworks(cluster)
+	additionalManifests := getClusterAdditionalManifestRefs(oacp)
+
+	aci := &hiveext.AgentClusterInstall{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      clusterDeployment.Name,
+			Namespace: clusterDeployment.Namespace,
+		},
+	}
+	mutate := func() error {
+		aci.ObjectMeta.Labels = util.ControlPlaneMachineLabelsForCluster(
+			&oacp,
+			clusterDeployment.Labels[clusterv1.ClusterNameLabel],
+		)
+		aci.ObjectMeta.Labels[hiveext.ClusterConsumerLabel] = openshiftAssistedControlPlaneKind
+		aci.ObjectMeta.OwnerReferences = []metav1.OwnerReference{
+			*metav1.NewControllerRef(&oacp, controlplanev1alpha2.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
+		}
+
+		aci.Spec.ClusterDeploymentRef = corev1.LocalObjectReference{Name: clusterDeployment.Name}
+		aci.Spec.PlatformType = hiveext.PlatformType(configv1.NonePlatformType)
+		aci.Spec.ProvisionRequirements = hiveext.ProvisionRequirements{
+			ControlPlaneAgents: int(oacp.Spec.Replicas),
+			WorkerAgents:       workerNodes,
+		}
+		aci.Spec.DiskEncryption = oacp.Spec.Config.DiskEncryption
+		aci.Spec.MastersSchedulable = oacp.Spec.Config.MastersSchedulable
+		aci.Spec.Proxy = oacp.Spec.Config.Proxy
+		aci.Spec.SSHPublicKey = oacp.Spec.Config.SSHAuthorizedKey
+		aci.Spec.ImageSetRef = &hivev1.ClusterImageSetReference{Name: clusterDeployment.Name}
+		aci.Spec.Networking.ClusterNetwork = clusterNetwork
+		aci.Spec.Networking.ServiceNetwork = serviceNetwork
+		aci.Spec.ManifestsConfigMapRefs = additionalManifests
+
+		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
+			aci.Spec.APIVIPs = oacp.Spec.Config.APIVIPs
+			aci.Spec.IngressVIPs = oacp.Spec.Config.IngressVIPs
+			aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
+		}
+		if err := setACICapabilities(&oacp, aci); err != nil {
+			return err
+		}
+		return nil
 	}
 
-	if err := util.CreateOrUpdate(ctx, r.Client, aci); err != nil {
-		log.Error(err, "failed creating AgentClusterInstall")
-		return ctrl.Result{}, err
+	if _, err = controllerutil.CreateOrPatch(ctx, r.Client, aci, mutate); err != nil {
+		log.Error(err, "failed to create or update AgentClusterInstall")
+		return err
 	}
-	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment, aci)
+
+	return nil
 }
 
 // Returns release image from OpenshiftAssistedControlPlane. It will compute it starting from Spec.DistributionVersion and
@@ -161,37 +212,32 @@ func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, c
 func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 	ctx context.Context,
 	cd *hivev1.ClusterDeployment,
-	aci *hiveext.AgentClusterInstall,
 ) error {
 	cd.Spec.ClusterInstallRef = &hivev1.ClusterInstallLocalReference{
 		Group:   hiveext.Group,
 		Version: hiveext.Version,
 		Kind:    "AgentClusterInstall",
-		Name:    aci.Name,
+		Name:    cd.Name,
 	}
 	return r.Client.Update(ctx, cd)
 }
 
-func computeClusterImageSet(imageSetName string, releaseImage string) *hivev1.ClusterImageSet {
-	return &hivev1.ClusterImageSet{
+func ensureClusterImageSet(ctx context.Context, c client.Client, imageSetName string, releaseImage string) error {
+	imageSet := &hivev1.ClusterImageSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: imageSetName,
 		},
-		Spec: hivev1.ClusterImageSetSpec{
-			ReleaseImage: releaseImage,
-		},
 	}
+
+	_, err := controllerutil.CreateOrPatch(ctx, c, imageSet, func() error {
+		imageSet.Spec.ReleaseImage = releaseImage
+		return nil
+	})
+
+	return err
 }
 
-func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
-	ctx context.Context,
-	clusterDeployment *hivev1.ClusterDeployment,
-	acp controlplanev1alpha2.OpenshiftAssistedControlPlane,
-	imageSet *hivev1.ClusterImageSet,
-	cluster *clusterv1.Cluster,
-	workerReplicas int,
-) (*hiveext.AgentClusterInstall, error) {
-	log := ctrl.LoggerFrom(ctx)
+func getClusterNetworks(cluster *clusterv1.Cluster) ([]hiveext.ClusterNetworkEntry, []string) {
 	var clusterNetwork []hiveext.ClusterNetworkEntry
 
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Pods != nil {
@@ -203,61 +249,21 @@ func (r *ClusterDeploymentReconciler) computeAgentClusterInstall(
 	if cluster.Spec.ClusterNetwork != nil && cluster.Spec.ClusterNetwork.Services != nil {
 		serviceNetwork = cluster.Spec.ClusterNetwork.Services.CIDRBlocks
 	}
+
+	return clusterNetwork, serviceNetwork
+}
+
+func getClusterAdditionalManifestRefs(acp controlplanev1alpha2.OpenshiftAssistedControlPlane) []hiveext.ManifestsConfigMapReference {
 	var additionalManifests []hiveext.ManifestsConfigMapReference
 	if len(acp.Spec.Config.ManifestsConfigMapRefs) > 0 {
 		additionalManifests = append(additionalManifests, acp.Spec.Config.ManifestsConfigMapRefs...)
 	}
 
 	if acp.Spec.Config.ImageRegistryRef != nil {
-		if err := r.createImageRegistry(ctx, acp.Spec.Config.ImageRegistryRef.Name, acp.Namespace); err != nil {
-			log.Error(err, "failed to create image registry config manifest")
-			return nil, err
-		}
 		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
 	}
 
-	aci := &hiveext.AgentClusterInstall{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      clusterDeployment.Name,
-			Namespace: clusterDeployment.Namespace,
-			Labels: util.ControlPlaneMachineLabelsForCluster(
-				&acp,
-				clusterDeployment.Labels[clusterv1.ClusterNameLabel],
-			),
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(&acp, controlplanev1alpha2.GroupVersion.WithKind(openshiftAssistedControlPlaneKind)),
-			},
-		},
-		Spec: hiveext.AgentClusterInstallSpec{
-			ClusterDeploymentRef: corev1.LocalObjectReference{Name: clusterDeployment.Name},
-			PlatformType:         hiveext.PlatformType(configv1.NonePlatformType),
-			ProvisionRequirements: hiveext.ProvisionRequirements{
-				ControlPlaneAgents: int(acp.Spec.Replicas),
-				WorkerAgents:       workerReplicas,
-			},
-			DiskEncryption:     acp.Spec.Config.DiskEncryption,
-			MastersSchedulable: acp.Spec.Config.MastersSchedulable,
-			Proxy:              acp.Spec.Config.Proxy,
-			SSHPublicKey:       acp.Spec.Config.SSHAuthorizedKey,
-			ImageSetRef:        &hivev1.ClusterImageSetReference{Name: imageSet.Name},
-			Networking: hiveext.Networking{
-				ClusterNetwork: clusterNetwork,
-				ServiceNetwork: serviceNetwork,
-			},
-			ManifestsConfigMapRefs: additionalManifests,
-		},
-	}
-	aci.Labels[hiveext.ClusterConsumerLabel] = openshiftAssistedControlPlaneKind
-
-	if len(acp.Spec.Config.APIVIPs) > 0 && len(acp.Spec.Config.IngressVIPs) > 0 {
-		aci.Spec.APIVIPs = acp.Spec.Config.APIVIPs
-		aci.Spec.IngressVIPs = acp.Spec.Config.IngressVIPs
-		aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
-	}
-	if err := setACICapabilities(&acp, aci); err != nil {
-		return nil, err
-	}
-	return aci, nil
+	return additionalManifests
 }
 
 func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, registryName, registryNamespace string) error {
@@ -266,15 +272,23 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 		return err
 	}
 
-	spokeImageRegistryConfigmap, err := imageregistry.GenerateImageRegistryConfigmap(registryConfigmap, registryNamespace)
+	spokeImageRegistryData, err := imageregistry.GenerateImageRegistryData(registryConfigmap, registryNamespace)
 	if err != nil {
 		return err
 	}
 
-	if err := util.CreateOrUpdate(ctx, r.Client, spokeImageRegistryConfigmap); err != nil {
-		return err
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      imageregistry.ImageConfigMapName,
+			Namespace: registryNamespace,
+		},
 	}
-	return nil
+	_, err = controllerutil.CreateOrPatch(ctx, r.Client, cm, func() error {
+		cm.Data = spokeImageRegistryData
+		return nil
+	})
+
+	return err
 }
 
 type InstallConfigOverride struct {

@@ -30,12 +30,12 @@ type MirrorConfigs struct {
 	InsecureRegistries []string
 }
 
-// GenerateImageRegistryConfigmap generates a ConfigMap containing the manifests for mirror registry configuration
-// to be created on the spoke cluster. The manifests that are in the ConfigMap include an ImageDigestMirrorSet CR
+// GenerateImageRegistryData generates ConfigMap data for the manifests for mirror registry configuration
+// to be created on the spoke cluster. The manifests that are in the data include an ImageDigestMirrorSet CR
 // and/or an ImageTagMirrorSet CR with the mirror registry information, a ConfigMap containing the additional
 // trusted certificates for the mirror registry, and an image.config.openshift.io CR that references the
 // ConfigMap with the additional trusted certificate.
-func GenerateImageRegistryConfigmap(imageRegistry *corev1.ConfigMap, namespace string) (*corev1.ConfigMap, error) {
+func GenerateImageRegistryData(imageRegistry *corev1.ConfigMap, namespace string) (map[string]string, error) {
 	data := make(map[string]string, 0)
 
 	registryConf, ok := imageRegistry.Data[registryConfKey]
@@ -86,14 +86,7 @@ func GenerateImageRegistryConfigmap(imageRegistry *corev1.ConfigMap, namespace s
 		data[imageConfigKey] = string(imageConfigJSON)
 	}
 
-	imageConfig := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ImageConfigMapName,
-			Namespace: namespace,
-		},
-		Data: data,
-	}
-	return imageConfig, nil
+	return data, nil
 }
 
 // getImageRegistries reads a toml tree string with the structure:
