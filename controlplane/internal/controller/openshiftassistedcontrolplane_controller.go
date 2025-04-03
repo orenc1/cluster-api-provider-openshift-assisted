@@ -26,6 +26,7 @@ import (
 
 	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
 	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
 	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
@@ -185,6 +186,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 		log.Error(err, "failed to ensure a ClusterDeployment exists")
 		return ctrl.Result{}, err
 	}
+
+	if err := r.setClusterDeploymentRef(ctx, oacp); err != nil {
+		log.Error(err, "failed to set OACP ClusterDeployment reference")
+		return ctrl.Result{}, err
+	}
+
 	pullsecret, err := auth.GetPullSecret(r.Client, ctx, oacp)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -500,23 +507,31 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensureClusterDeployment(
 	acp *controlplanev1alpha2.OpenshiftAssistedControlPlane,
 	clusterName string,
 ) error {
-	if acp.Status.ClusterDeploymentRef == nil {
-		clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, clusterName)
-		_ = controllerutil.SetOwnerReference(acp, clusterDeployment, r.Scheme)
-		if err := util.CreateOrUpdate(ctx, r.Client, clusterDeployment); err != nil {
-			return err
-		}
-		ref, err := reference.GetReference(r.Scheme, clusterDeployment)
-		if err != nil {
-			return err
-		}
-		acp.Status.ClusterDeploymentRef = ref
+	if acp.Status.ClusterDeploymentRef != nil {
 		return nil
 	}
 
-	// Retrieve clusterdeployment
+	clusterDeployment := assistedinstaller.GetClusterDeploymentFromConfig(acp, clusterName)
+	_ = controllerutil.SetOwnerReference(acp, clusterDeployment, r.Scheme)
+	if err := util.CreateOrUpdate(ctx, r.Client, clusterDeployment); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *OpenshiftAssistedControlPlaneReconciler) setClusterDeploymentRef(ctx context.Context, acp *v1alpha2.OpenshiftAssistedControlPlane) error {
+	cdKey := types.NamespacedName{
+		Name:      acp.Name,
+		Namespace: acp.Namespace,
+	}
+	if acp.Status.ClusterDeploymentRef != nil {
+		cdKey.Name = acp.Status.ClusterDeploymentRef.Name
+		cdKey.Namespace = acp.Status.ClusterDeploymentRef.Namespace
+	}
+
 	cd := &hivev1.ClusterDeployment{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: acp.Status.ClusterDeploymentRef.Namespace, Name: acp.Status.ClusterDeploymentRef.Name}, cd); err != nil {
+	if err := r.Client.Get(ctx, cdKey, cd); err != nil {
 		if apierrors.IsNotFound(err) {
 			// Cluster deployment no longer exists, unset reference and re-reconcile
 			acp.Status.ClusterDeploymentRef = nil
@@ -524,6 +539,13 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensureClusterDeployment(
 		}
 		return err
 	}
+
+	ref, err := reference.GetReference(r.Scheme, cd)
+	if err != nil {
+		return err
+	}
+	acp.Status.ClusterDeploymentRef = ref
+
 	return nil
 }
 
