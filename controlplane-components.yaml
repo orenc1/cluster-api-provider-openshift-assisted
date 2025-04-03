@@ -1,15 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  labels:
-    app.kubernetes.io/component: manager
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: system
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: namespace
-    app.kubernetes.io/part-of: cluster-api-agent
-    control-plane: controller-manager
-  name: capi-agent-controlplane-system
+  name: capoa-system
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
@@ -685,24 +677,13 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  labels:
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: cluster-api-agent
-  name: capi-agent-controlplanecontroller-manager
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: leader-election-role
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: role
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplaneleader-election-role
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-leader-election-role
 rules:
 - apiGroups:
   - ""
@@ -739,7 +720,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: capi-agent-controlplanemanager-role
+  name: capoa-controlplane-manager-role
 rules:
 - apiGroups:
   - ""
@@ -891,14 +872,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: metrics-reader
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: clusterrole
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplanemetrics-reader
+  name: capoa-controlplane-metrics-reader
 rules:
 - nonResourceURLs:
   - /metrics
@@ -908,14 +882,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: proxy-role
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: clusterrole
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplaneproxy-role
+  name: capoa-controlplane-proxy-role
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -933,77 +900,48 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: leader-election-rolebinding
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: rolebinding
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplaneleader-election-rolebinding
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-leader-election-rolebinding
+  namespace: capoa-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: capi-agent-controlplaneleader-election-role
+  name: capoa-controlplane-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: capi-agent-controlplanecontroller-manager
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/component: rbac
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: manager-rolebinding
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: clusterrolebinding
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplanemanager-rolebinding
+  name: capoa-controlplane-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capi-agent-controlplanemanager-role
+  name: capoa-controlplane-manager-role
 subjects:
 - kind: ServiceAccount
-  name: capi-agent-controlplanecontroller-manager
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager
+  namespace: capoa-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  labels:
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: proxy-rolebinding
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: clusterrolebinding
-    app.kubernetes.io/part-of: cluster-api-agent
-  name: capi-agent-controlplaneproxy-rolebinding
+  name: capoa-controlplane-proxy-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: capi-agent-controlplaneproxy-role
+  name: capoa-controlplane-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: capi-agent-controlplanecontroller-manager
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager
+  namespace: capoa-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  labels:
-    app.kubernetes.io/component: kube-rbac-proxy
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: controller-manager-metrics-service
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: service
-    app.kubernetes.io/part-of: cluster-api-agent
-    control-plane: controller-manager
-  name: capi-agent-controlplanecontroller-manager-metrics-service
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager-metrics-service
+  namespace: capoa-system
 spec:
   ports:
   - name: https
@@ -1011,32 +949,22 @@ spec:
     protocol: TCP
     targetPort: https
   selector:
-    control-plane: controller-manager
+    control-plane: capoa-controlplane-controller-manager
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  labels:
-    app.kubernetes.io/component: manager
-    app.kubernetes.io/created-by: cluster-api-agent
-    app.kubernetes.io/instance: controller-manager
-    app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: deployment
-    app.kubernetes.io/part-of: cluster-api-agent
-    control-plane: controller-manager
-  name: capi-agent-controlplanecontroller-manager
-  namespace: capi-agent-controlplane-system
+  name: capoa-controlplane-controller-manager
+  namespace: capoa-system
 spec:
   replicas: 1
   selector:
     matchLabels:
-      control-plane: controller-manager
+      control-plane: capoa-controlplane-controller-manager
   template:
     metadata:
-      annotations:
-        kubectl.kubernetes.io/default-container: manager
       labels:
-        control-plane: controller-manager
+        control-plane: capoa-controlplane-controller-manager
     spec:
       containers:
       - args:
@@ -1097,5 +1025,5 @@ spec:
             - ALL
       securityContext:
         runAsNonRoot: true
-      serviceAccountName: capi-agent-controlplanecontroller-manager
+      serviceAccountName: capoa-controlplane-controller-manager
       terminationGracePeriodSeconds: 10
