@@ -156,10 +156,8 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		aci.Spec.Proxy = oacp.Spec.Config.Proxy
 		aci.Spec.SSHPublicKey = oacp.Spec.Config.SSHAuthorizedKey
 		aci.Spec.ImageSetRef = &hivev1.ClusterImageSetReference{Name: clusterDeployment.Name}
-		aci.Spec.Networking = hiveext.Networking{
-			ClusterNetwork: clusterNetwork,
-			ServiceNetwork: serviceNetwork,
-		}
+		aci.Spec.Networking.ClusterNetwork = clusterNetwork
+		aci.Spec.Networking.ServiceNetwork = serviceNetwork
 		aci.Spec.ManifestsConfigMapRefs = additionalManifests
 
 		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
