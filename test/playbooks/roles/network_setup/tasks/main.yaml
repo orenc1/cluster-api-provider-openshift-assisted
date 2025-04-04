@@ -12,6 +12,17 @@
     regexp: '^#dns_servers = \[\]'
     line: 'dns_servers = ["192.168.222.1", "8.8.8.8"]'
     state: present
+- name: Unlimited number of pids for podman
+  ansible.builtin.lineinfile:
+    path: /usr/share/containers/containers.conf
+    regexp: '^# pids_limit = .*'
+    line: 'pids_limit = -1'
+    state: present
+- name: Restart podman service
+  ansible.builtin.systemd_service:
+    state: restarted
+    daemon_reload: true
+    name: podman
 # create libvirt network with dns server (only recursive)
 - name: Start libvirt network
   community.libvirt.virt_net:
