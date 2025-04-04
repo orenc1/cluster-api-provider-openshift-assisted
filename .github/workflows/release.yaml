@@ -28,26 +28,6 @@ jobs:
         run: |
           sed -i "s,quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted:latest,${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:${{env.VERSION}}," bootstrap-components.yaml
           sed -i "s,quay.io/edge-infrastructure/cluster-api-controlplane-provider-openshift-assisted:latest,${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:${{env.VERSION}}," controlplane-components.yaml
-      - name: Login to Quay.io
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ secrets.REGISTRY_SERVER }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      - name: Build and publish bootstrap image to Quay
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          context: ${{ env.context }}
-          tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:${{env.VERSION}}, ${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:latest"
-          build-args: "PROVIDER=bootstrap"
-      - name: Build and publish controplane image to Quay
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          context: ${{ env.context }}
-          tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:${{env.VERSION}}, ${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:latest"
-          build-args: "PROVIDER=controlplane"
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v0.1.14
         with:
