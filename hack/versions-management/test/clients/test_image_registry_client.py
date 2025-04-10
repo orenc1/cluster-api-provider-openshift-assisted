@@ -12,9 +12,9 @@ def client():
 
 @pytest.mark.parametrize("status,exists", [(200, True), (404, False)])
 def test_exists(monkeypatch, client, status, exists):
-    monkeypatch.setattr(requests, "head", lambda url, headers: DummyResponse(status))
+    monkeypatch.setattr(requests, "head", lambda url, headers, timeout: DummyResponse(status))
     assert client.exists("quay.io/ns/repo", "tag") is exists
 
 def test_exists_error(monkeypatch, client):
-    monkeypatch.setattr(requests, "head", lambda url, headers: (_ for _ in ()).throw(Exception("fail")))
+    monkeypatch.setattr(requests, "head", lambda url, headers, timeout: (_ for _ in ()).throw(Exception("fail")))
     assert client.exists("quay.io/ns/repo", "tag") is False

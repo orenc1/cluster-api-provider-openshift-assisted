@@ -131,6 +131,12 @@
     assisted_installer_agent_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_AGENT_IMAGE', default=default_assisted_installer_agent_image) }}"
     assisted_installer_controller_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_CONTROLLER_IMAGE', default=default_assisted_installer_controller_image) }}"
     assisted_installer_image: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_IMAGE', default=default_assisted_installer_image) }}"
+    assisted_service_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_VERSION', default=default_assisted_service_version) }}"
+    assisted_service_el8_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_SERVICE_EL8_VERSION', default=default_assisted_service_el8_version) }}"
+    assisted_image_service_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_IMAGE_SERVICE_VERSION', default=default_assisted_image_service_version) }}"
+    assisted_installer_agent_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_AGENT_VERSION', default=default_assisted_installer_agent_version) }}"
+    assisted_installer_controller_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_CONTROLLER_VERSION', default=default_assisted_installer_controller_version) }}"
+    assisted_installer_version: "{{ lookup('ansible.builtin.env', 'ASSISTED_INSTALLER_VERSION', default=default_assisted_installer_version) }}"
 
 - name: Deploy infrastructure operator
   kubernetes.core.k8s:

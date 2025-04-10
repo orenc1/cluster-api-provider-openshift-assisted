@@ -13,7 +13,7 @@ class ImageRegistryClient:
         url = f"{self.registry_url}/v2/{path}/manifests/{tag}"
         headers = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
         try:
-            response = requests.head(url=url, headers=headers, timeout=5)
+            response = requests.head(url=url, headers=headers, timeout=10)
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Error checking image {image} existence: {e}")
@@ -25,7 +25,7 @@ class ImageRegistryClient:
         headers = {"Accept": "application/vnd.docker.distribution.manifest.v2+json"}
 
         try:
-            response = requests.get(url=url, headers=headers, timeout=5)
+            response = requests.get(url=url, headers=headers, timeout=10)
             if response.status_code == 200:
                 digest = response.headers.get("Docker-Content-Digest")
                 if digest:
