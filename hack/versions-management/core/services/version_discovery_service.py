@@ -87,7 +87,8 @@ class VersionDiscoveryService(Service):
                             ref=sha,
                             versioning_selection_mechanism=component.versioning_selection_mechanism,
                             name=component.name,
-                            image_url=f"{img_pattern}@{digest}",
+                            image_url=img_pattern,
+                            image_digest=digest,
                         )
             else:
                 raise Exception(f"Versioning mechanism of component {component.repository} is not supported")

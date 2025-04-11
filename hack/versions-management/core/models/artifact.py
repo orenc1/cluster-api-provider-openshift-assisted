@@ -7,4 +7,5 @@ class Artifact:
     name: str
     versioning_selection_mechanism: str
     image_url: str | None = None
+    image_digest: str | None = None
 

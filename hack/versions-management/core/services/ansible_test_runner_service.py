@@ -36,32 +36,61 @@ class AnsibleTestRunnerService(Service):
         updated_snapshot = Snapshot(metadata=updated, artifacts=pending_snapshot.artifacts)
         self.repo.update(updated_snapshot)
         
-    def export_env(self, snapshot: Snapshot) -> None:
-        name_map = {
-            "kubernetes-sigs/cluster-api": "CAPI_VERSION",
-            "metal3-io/cluster-api-provider-metal3": "CAPM3_VERSION",
-            "quay.io/edge-infrastructure/assisted-service": "ASSISTED_SERVICE_IMAGE",
-            "quay.io/edge-infrastructure/assisted-service-el8": "ASSISTED_SERVICE_EL8_IMAGE",
-            "quay.io/edge-infrastructure/assisted-image-service": "ASSISTED_IMAGE_SERVICE_IMAGE",
-            "quay.io/edge-infrastructure/assisted-installer-agent": "ASSISTED_INSTALLER_AGENT_IMAGE",
-            "quay.io/edge-infrastructure/assisted-installer-controller": "ASSISTED_INSTALLER_CONTROLLER_IMAGE",
-            "quay.io/edge-infrastructure/assisted-installer": "ASSISTED_INSTALLER_IMAGE",
-        }
 
+    def export_env(self, snapshot: Snapshot) -> None:
+        names_map = self.get_env_var_map()
         for comp in snapshot.artifacts:
             match comp.versioning_selection_mechanism:
                 case "release": 
-                    env_key = name_map.get(comp.name)
+                    env_key = names_map.get(comp.name, {}).get("version")
                     if env_key:
                         os.environ[env_key] = comp.ref
                         self.logger.info(f"Exported {env_key}={comp.ref}")
                 case "commit":
-                    image_key = comp.image_url.split("@")[0]
-                    env_key = name_map.get(image_key)
-                    if env_key:
-                        os.environ[env_key] = comp.image_url
-                        self.logger.info(f"Exported {env_key}={comp.image_url}")
+                    key = comp.name
+                    image_key = names_map.get(key, {}).get("image")
+                    version_key = names_map.get(key, {}).get("version")
+                    if image_key and version_key and comp.image_url and comp.image_digest:
+                        os.environ[image_key] = comp.image_url
+                        os.environ[version_key] = comp.image_digest
+                        self.logger.info(f"Exported {image_key}={comp.image_url}, {version_key}={comp.image_digest}")
                     else:
                         self.logger.warning(f"No environment variable mapping found for {comp.name}")
                 case _:
                     raise Exception(f"Unsupported versioning selection mechanism: {comp.versioning_selection_mechanism}") 
+
+
+    def get_env_var_map(self) -> dict[str, dict[str, str]]:
+        return {
+            "kubernetes-sigs/cluster-api": {
+                "version": "CAPI_VERSION",
+            },
+            "metal3-io/cluster-api-provider-metal3": {
+                "version": "CAPM3_VERSION",
+            },
+            "openshift/assisted-service": {
+                "image": "ASSISTED_SERVICE_IMAGE",
+                "version": "ASSISTED_SERVICE_VERSION",
+            },
+            "openshift/assisted-service-el8": {
+                "image": "ASSISTED_SERVICE_EL8_IMAGE",
+                "version": "ASSISTED_SERVICE_EL8_VERSION",
+            },
+            "openshift/assisted-image-service": {
+                "image": "ASSISTED_IMAGE_SERVICE_IMAGE",
+                "version": "ASSISTED_IMAGE_SERVICE_VERSION",
+            },
+            "openshift/assisted-installer-agent": {
+                "image": "ASSISTED_INSTALLER_AGENT_IMAGE",
+                "version": "ASSISTED_INSTALLER_AGENT_VERSION",
+            },
+            "openshift/assisted-installer": {
+                "image": "ASSISTED_INSTALLER_IMAGE",
+                "version": "ASSISTED_INSTALLER_VERSION",
+            },
+            "openshift/assisted-installer-controller": {
+                "image": "ASSISTED_INSTALLER_CONTROLLER_IMAGE",
+                "version": "ASSISTED_INSTALLER_CONTROLLER_VERSION",
+            },
+        }
+
