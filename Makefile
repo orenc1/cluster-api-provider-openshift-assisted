@@ -82,13 +82,13 @@ lint: golangci-lint ## Run golangci-lint linter & yamllint
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+.PHONY: e2e-test-dependencies
+e2e-test-dependencies:
+	ansible-galaxy collection install -r $(PLAYBOOK_DIR)/../ansible-requirements.yaml
+
 .PHONY: e2e-test
-e2e-test:
-	ANSIBLE_HOME=$(ANSIBLE_HOME) \
-	ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) \
-	ANSIBLE_CACHE_PLUGIN_CONNECTION=$(ANSIBLE_CACHE_PLUGIN_CONNECTION) \
-	XDG_CACHE_HOME=$(XDG_CACHE_HOME) \
-	bash -c 'ansible-galaxy collection install -r $(PLAYBOOK_DIR)/../ansible-requirements.yaml && ansible-playbook $(PLAYBOOK_DIR)/run_test.yaml -i $(PLAYBOOK_DIR)/inventories/remote_host.yaml'
+e2e-test: e2e-test-dependencies
+	ansible-playbook $(PLAYBOOK_DIR)/run_test.yaml -i $(PLAYBOOK_DIR)/inventories/remote_host.yaml
 
 .PHONY: ansible-lint
 ansible-lint:
