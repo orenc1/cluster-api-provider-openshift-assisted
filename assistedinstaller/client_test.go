@@ -68,6 +68,28 @@ var _ = Describe("GetAssistedHTTPClient", func() {
 		Expect(err).ToNot(BeNil())
 	})
 
+	It("fails when the referenced resource is not valid", func() {
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cm-name",
+				Namespace: "test-cm-namespace",
+			},
+			Data: map[string]string{
+				"bundle.crt": testCert,
+			},
+		}
+		Expect(c.Create(context.Background(), cm)).To(Succeed())
+
+		config := ServiceConfig{
+			AssistedCABundleName:      "test-cm-name",
+			AssistedCABundleNamespace: "test-cm-namespace",
+			AssistedCABundleKey:       "bundle.crt",
+			AssistedCABundleResource:  "deployment",
+		}
+		_, err := GetAssistedHTTPClient(config, c)
+		Expect(err).ToNot(BeNil())
+	})
+
 	It("fails when the referenced CM key is not present", func() {
 		cm := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
@@ -84,6 +106,7 @@ var _ = Describe("GetAssistedHTTPClient", func() {
 			AssistedCABundleName:      "test-cm-name",
 			AssistedCABundleNamespace: "test-cm-namespace",
 			AssistedCABundleKey:       "bundle.crt",
+			AssistedCABundleResource:  "secret",
 		}
 		_, err := GetAssistedHTTPClient(config, c)
 		Expect(err).ToNot(BeNil())
@@ -105,6 +128,29 @@ var _ = Describe("GetAssistedHTTPClient", func() {
 			AssistedCABundleName:      "test-cm-name",
 			AssistedCABundleNamespace: "test-cm-namespace",
 			AssistedCABundleKey:       "bundle.crt",
+			AssistedCABundleResource:  "configmap",
+		}
+		_, err := GetAssistedHTTPClient(config, c)
+		Expect(err).To(BeNil())
+	})
+
+	It("creates a client using the referenced certs with secret", func() {
+		cm := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-cm-name",
+				Namespace: "test-cm-namespace",
+			},
+			Data: map[string][]byte{
+				"bundle.crt": []byte(testCert),
+			},
+		}
+		Expect(c.Create(context.Background(), cm)).To(Succeed())
+
+		config := ServiceConfig{
+			AssistedCABundleName:      "test-cm-name",
+			AssistedCABundleNamespace: "test-cm-namespace",
+			AssistedCABundleKey:       "bundle.crt",
+			AssistedCABundleResource:  "secret",
 		}
 		_, err := GetAssistedHTTPClient(config, c)
 		Expect(err).To(BeNil())

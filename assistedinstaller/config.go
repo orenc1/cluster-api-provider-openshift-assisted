@@ -16,6 +16,7 @@ type ServiceConfig struct {
 	// Name and namespace of a configmap containing the CA bundle to trust when querying assisted-service
 	AssistedCABundleNamespace string `envconfig:"ASSISTED_CA_BUNDLE_NAMESPACE"`
 	AssistedCABundleName      string `envconfig:"ASSISTED_CA_BUNDLE_NAME"`
+	AssistedCABundleResource  string `envconfig:"ASSISTED_CA_BUNDLE_RESOURCE" default:"configmap"`
 	// Key name to reference in the CA bundle configmap where the cert bundle is stored
 	AssistedCABundleKey string `envconfig:"ASSISTED_CA_BUNDLE_KEY" default:"ca-bundle.crt"`
 }

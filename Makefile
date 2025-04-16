@@ -169,6 +169,9 @@ docker-buildx: ## Build and push docker image for the manager for cross-platform
 generate-published-manifests: build-installer
 	cp $(DIST_DIR)/controlplane_install.yaml controlplane-components.yaml
 	cp $(DIST_DIR)/bootstrap_install.yaml bootstrap-components.yaml
+	cp $(DIST_DIR)/controlplane_install.yaml test/e2e/manifests/capcoa/controlplane_install.yaml
+	cp $(DIST_DIR)/bootstrap_install.yaml test/e2e/manifests/capboa/bootstrap_install.yaml
+
 
 .PHONY: build-installer
 build-installer:

@@ -1,0 +1,38 @@
+resources:
+  - bootstrap_install.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+images:
+  - name: controller
+    newName: quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted
+    newTag: local
+
+patches:
+  - patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ASSISTED_CA_BUNDLE_NAME
+          value: assisted-installer-ca
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ASSISTED_CA_BUNDLE_NAMESPACE
+          value: assisted-installer
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ASSISTED_CA_BUNDLE_RESOURCE
+          value: secret
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: ASSISTED_CA_BUNDLE_KEY
+          value: ca.crt
+    target:
+      kind: Deployment
+      name: capoa-bootstrap-controller-manager
+      version: v1
