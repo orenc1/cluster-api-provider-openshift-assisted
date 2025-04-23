@@ -285,6 +285,83 @@ var _ = Describe("Agent Controller", func() {
 				Expect(postOAC.Status.AgentRef.Name).To(Equal(agent.Name))
 			})
 		})
+
+		When("an Agent resource exists with another approved agent using the same infraenv", func() {
+			It("should not approve the new agent", func() {
+				By("Creating first agent with infraenv")
+				firstAgent := testutils.NewAgentWithInfraEnvLabel(namespace, "first-agent", machineName)
+				firstAgent.Spec.Approved = true
+				Expect(k8sClient.Create(ctx, firstAgent)).To(Succeed())
+
+				By("Creating the OpenshiftAssistedConfig")
+				oac := testutils.NewOpenshiftAssistedConfig(namespace, oacName, clusterName)
+				Expect(k8sClient.Create(ctx, oac)).To(Succeed())
+
+				machine := testutils.NewMachine(namespace, machineName, clusterName)
+				machine.Spec.Bootstrap.ConfigRef = &corev1.ObjectReference{
+					Name:      oacName,
+					Namespace: namespace,
+				}
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+
+				By("Creating the matching InfraEnv")
+				infraEnv := testutils.NewInfraEnv(namespace, machineName)
+				Expect(controllerutil.SetOwnerReference(machine, infraEnv, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
+
+				By("Creating second agent with same infraenv")
+				secondAgent := testutils.NewAgentWithInfraEnvLabel(namespace, "second-agent", machineName)
+				Expect(k8sClient.Create(ctx, secondAgent)).To(Succeed())
+
+				By("Reconciling the second Agent")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(secondAgent),
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Checking that second agent was not approved")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(secondAgent), secondAgent)).To(Succeed())
+				Expect(secondAgent.Spec.Approved).To(BeFalse())
+			})
+		})
+
+		When("multiple agents exist with the same infraenv but none are approved", func() {
+			It("should approve the first reconciled agent", func() {
+				By("Creating first agent with infraenv")
+				firstAgent := testutils.NewAgentWithInfraEnvLabel(namespace, "first-agent", machineName)
+				Expect(k8sClient.Create(ctx, firstAgent)).To(Succeed())
+
+				By("Creating second agent with same infraenv")
+				secondAgent := testutils.NewAgentWithInfraEnvLabel(namespace, "second-agent", machineName)
+				Expect(k8sClient.Create(ctx, secondAgent)).To(Succeed())
+
+				By("Creating the OpenshiftAssistedConfig")
+				oac := testutils.NewOpenshiftAssistedConfig(namespace, oacName, clusterName)
+				Expect(k8sClient.Create(ctx, oac)).To(Succeed())
+
+				machine := testutils.NewMachine(namespace, machineName, clusterName)
+				machine.Spec.Bootstrap.ConfigRef = &corev1.ObjectReference{
+					Name:      oacName,
+					Namespace: namespace,
+				}
+				Expect(k8sClient.Create(ctx, machine)).To(Succeed())
+
+				By("Creating the matching InfraEnv")
+				infraEnv := testutils.NewInfraEnv(namespace, machineName)
+				Expect(controllerutil.SetOwnerReference(machine, infraEnv, testScheme)).To(Succeed())
+				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
+
+				By("Reconciling the first Agent")
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: client.ObjectKeyFromObject(firstAgent),
+				})
+				Expect(err).NotTo(HaveOccurred())
+
+				By("Checking that first agent was approved")
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(firstAgent), firstAgent)).To(Succeed())
+				Expect(firstAgent.Spec.Approved).To(BeTrue())
+			})
+		})
 	})
 })
 
