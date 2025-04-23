@@ -88,8 +88,6 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 }
 
 func getIgnitionConfig(config *bootstrapv1alpha1.OpenshiftAssistedConfig) (string, error) {
-	capiSuccessFile := ignition.CreateIgnitionFile("/run/cluster-api/bootstrap-success.complete",
-		"root", "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw==", 420, true)
 	// get labels and set them as KUBELET_EXTRA_LABELS in ignition
 	extraLabels := strings.Join(config.Spec.NodeRegistration.KubeletExtraLabels, ",")
 	content := `#!/bin/bash
@@ -98,9 +96,7 @@ echo "CUSTOM_KUBELET_LABELS=` + extraLabels + `" | tee -a /etc/kubernetes/kubele
 	b64Content := base64.StdEncoding.EncodeToString([]byte(content))
 	kubeletCustomLabels := ignition.CreateIgnitionFile("/usr/local/bin/kubelet_custom_labels",
 		"root", "data:text/plain;charset=utf-8;base64,"+b64Content, 493, true)
-	ignition.CreateIgnitionFile("/run/cluster-api/bootstrap-success.complete",
-		"root", "data:text/plain;charset=utf-8;base64,c3VjY2Vzcw==", 420, true)
-	return ignition.GetIgnitionConfigOverrides(capiSuccessFile, kubeletCustomLabels)
+	return ignition.GetIgnitionConfigOverrides(kubeletCustomLabels)
 }
 
 func (r *AgentReconciler) ensureBootstrapConfigReference(ctx context.Context, machine *clusterv1.Machine, agentName string) (*bootstrapv1alpha1.OpenshiftAssistedConfig, error) {
