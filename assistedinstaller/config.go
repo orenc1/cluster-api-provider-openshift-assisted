@@ -13,10 +13,12 @@ type ServiceConfig struct {
 	AssistedServiceName string `envconfig:"ASSISTED_SERVICE_NAME" default:"assisted-service"`
 	// AssistedServiceName is the namemespace of the assisted-service
 	AssistedInstallerNamespace string `envconfig:"ASSISTED_INSTALLER_NAMESPACE"`
-	// Name and namespace of a configmap containing the CA bundle to trust when querying assisted-service
-	AssistedCABundleNamespace string `envconfig:"ASSISTED_CA_BUNDLE_NAMESPACE"`
-	AssistedCABundleName      string `envconfig:"ASSISTED_CA_BUNDLE_NAME"`
-	AssistedCABundleResource  string `envconfig:"ASSISTED_CA_BUNDLE_RESOURCE" default:"configmap"`
+	// Namespace of the resource containing the CA bundle to trust when querying assisted-service
+	AssistedCABundleNamespace string `envconfig:"ASSISTED_CA_BUNDLE_NAMESPACE" default:"assisted-installer"`
+	// Name of the resource where the CA Bundle is stored
+	AssistedCABundleName string `envconfig:"ASSISTED_CA_BUNDLE_NAME" default:"assisted-installer-ca"`
+	// Resource kind where the CA bundle is stored. OpenShift will use a configmap, kubernetes a secret
+	AssistedCABundleResource string `envconfig:"ASSISTED_CA_BUNDLE_RESOURCE" default:"secret"`
 	// Key name to reference in the CA bundle configmap where the cert bundle is stored
-	AssistedCABundleKey string `envconfig:"ASSISTED_CA_BUNDLE_KEY" default:"ca-bundle.crt"`
+	AssistedCABundleKey string `envconfig:"ASSISTED_CA_BUNDLE_KEY" default:"ca.crt"`
 }
