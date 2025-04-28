@@ -252,6 +252,7 @@ make ansible-lint
 ## ADRs
 * [001-distribution-version](docs/adr/001-distribution-version.md)
 * [002-distribution-version-upgrades](docs/adr/002-distribution-version-upgrades.md)
+* [003-sentinel-file-not-implemented](docs/adr/003-sentinel-file-not-implemented.md)
 
 ## Contributing
 
