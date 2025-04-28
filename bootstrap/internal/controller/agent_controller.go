@@ -82,9 +82,34 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 	agent.Spec.Role = role
 	agent.Spec.IgnitionConfigOverrides = ignitionConfigOverrides
 
-	// TODO: make sure we won't approve if an Agent with the same infraenv is already around
-	agent.Spec.Approved = true
+	approvable, err := r.canApproveAgent(ctx, agent)
+	if err != nil {
+		return err
+	}
+
+	agent.Spec.Approved = approvable
 	return r.Client.Update(ctx, agent)
+}
+
+func (r *AgentReconciler) canApproveAgent(ctx context.Context, agent *aiv1beta1.Agent) (bool, error) {
+	agentList := &aiv1beta1.AgentList{}
+	if err := r.Client.List(ctx, agentList, client.MatchingLabels{aiv1beta1.InfraEnvNameLabel: agent.Labels[aiv1beta1.InfraEnvNameLabel]}); err != nil {
+		return false, err
+	}
+
+	for _, existingAgent := range agentList.Items {
+		if existingAgent.Name != agent.Name &&
+			existingAgent.Spec.Approved {
+			log := ctrl.LoggerFrom(ctx)
+			log.V(logutil.WarningLevel).Info(
+				"not approving agent: another agent is already approved with the same infraenv",
+				"agent", agent.Name,
+				"infraenv", agent.Labels[aiv1beta1.InfraEnvNameLabel])
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 func getIgnitionConfig(config *bootstrapv1alpha1.OpenshiftAssistedConfig) (string, error) {
