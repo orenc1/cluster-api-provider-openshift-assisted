@@ -1,15 +1,15 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - https://raw.githubusercontent.com/openshift/assisted-service/0c92e1ae0ba4d8fe2f29b15e9824b88405aea480/hack/crds/hive/hive.openshift.io_clusterdeployments.yaml
-  - https://raw.githubusercontent.com/openshift/assisted-service/0c92e1ae0ba4d8fe2f29b15e9824b88405aea480/hack/crds/hive/hive.openshift.io_clusterimagesets.yaml
-  - https://raw.githubusercontent.com/openshift/assisted-service/0c92e1ae0ba4d8fe2f29b15e9824b88405aea480/hack/crds/mce/managedclusters.cluster.open-cluster-management.io.yaml
-  - https://github.com/openshift/assisted-service/config/default?ref=v2.38.1
+  - https://raw.githubusercontent.com/openshift/assisted-service/refs/tags/v2.40.0/hack/crds/hive/hive.openshift.io_clusterdeployments.yaml
+  - https://raw.githubusercontent.com/openshift/assisted-service/refs/tags/v2.40.0/hack/crds/hive/hive.openshift.io_clusterimagesets.yaml
+  - https://raw.githubusercontent.com/openshift/assisted-service/refs/tags/v2.40.0/hack/crds/mce/managedclusters.cluster.open-cluster-management.io.yaml
+  - https://github.com/openshift/assisted-service/config/default?ref=v2.40.0
 
 images:
   - name: quay.io/edge-infrastructure/assisted-service
-    newName: {{ assisted_service_image }}
-    digest: "{{ assisted_service_version }}"
+    newName: {{ infrastructure_operator_image }}
+    digest: "{{ infrastructure_operator_version }}"
 
 patches:
   - target:
