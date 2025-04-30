@@ -55,9 +55,8 @@ func GetReleaseImage(desiredVersion, repositoryOverride string, architecture str
 		return fmt.Sprintf("%s:%s-%s", repositoryOverride, desiredVersion, architecture)
 
 	}
-	repository := OCPRepository
 	if IsOKD(desiredVersion) {
-		repository = OKDRepository
+		return fmt.Sprintf("%s:%s", OKDRepository, desiredVersion)
 	}
-	return fmt.Sprintf("%s:%s-%s", repository, desiredVersion, architecture)
+	return fmt.Sprintf("%s:%s-%s", OCPRepository, desiredVersion, architecture)
 }
