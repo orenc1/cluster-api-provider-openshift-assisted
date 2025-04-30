@@ -1,0 +1,20 @@
+FROM golang:1.23-bookworm
+RUN curl -sSLO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" &&\
+    install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl &&\
+    curl -sSLo ./kind https://kind.sigs.k8s.io/dl/v0.22.0/kind-linux-amd64 &&\
+    chmod +x ./kind &&\
+    mv ./kind /usr/local/bin/kind &&\
+    curl -sSL https://github.com/kubernetes-sigs/cluster-api/releases/download/v1.6.3/clusterctl-linux-amd64 -o clusterctl &&\
+    install -o root -g root -m 0755 clusterctl /usr/local/bin/clusterctl &&\
+    curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 &&\
+    chmod 700 get_helm.sh &&\
+    ./get_helm.sh &&\
+    curl -sSL -o kubebuilder "https://go.kubebuilder.io/dl/latest/$(go env GOOS)/$(go env GOARCH)" &&\
+    chmod +x kubebuilder && mv kubebuilder /usr/local/bin/ &&\
+    apt-get update && apt-get install -y python3-venv python3-pip &&\
+    python3 -m venv /opt/venv
+
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN pip install jinja2-cli

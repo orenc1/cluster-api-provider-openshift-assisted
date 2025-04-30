@@ -141,8 +141,8 @@ docker-push-all: bootstrap-docker-push controlplane-docker-push
 docker-build: bootstrap-docker-build controlplane-docker-build
 
 .PHONY: docker-build-internal
-docker-build-internal: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build --build-arg PROVIDER=$(PROVIDER) -t ${IMG} .
+docker-build-internal: ## Does not ensure Dockerfiles are generated.
+	$(CONTAINER_TOOL) build -f Dockerfile.$(PROVIDER)-provider -t ${IMG} .
 
 .PHONY: docker-push-internal
 docker-push-internal: ## Push docker image with the manager.
@@ -172,6 +172,16 @@ generate-published-manifests: build-installer
 	cp $(DIST_DIR)/controlplane_install.yaml test/e2e/manifests/capcoa/controlplane_install.yaml
 	cp $(DIST_DIR)/bootstrap_install.yaml test/e2e/manifests/capboa/bootstrap_install.yaml
 
+.PHONY: generate-dockerfile
+generate-dockerfiles: generate-dockerfile-bootstrap generate-dockerfile-controlplane
+
+.PHONY: generate-dockerfile-bootstrap
+generate-dockerfile-bootstrap:
+	jinja2 Dockerfile.j2 -D provider=bootstrap > Dockerfile.bootstrap-provider
+
+.PHONY: generate-dockerfile-bootstrap
+generate-dockerfile-controlplane:
+	jinja2 Dockerfile.j2 -D provider=controlplane > Dockerfile.controlplane-provider
 
 .PHONY: build-installer
 build-installer:
@@ -213,7 +223,7 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: check-generated-files
-check-generated-files: generate manifests generate-published-manifests generate-mocks
+check-generated-files: generate manifests generate-published-manifests generate-mocks generate-dockerfiles
 	git add . && git diff --staged --exit-code
 
 ##@ Dependencies
