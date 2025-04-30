@@ -35,6 +35,37 @@ After this we will be able to initialize clusterctl:
 clusterctl init --bootstrap openshift-agent --control-plane openshift-agent -i  metal3:v1.7.0
 ```
 
+## Using the Makefile
+
+The Makefile can be used through a distrobox environment to ensure all dependencies are met.
+
+```sh
+podman build -f Dockerfile.distrobox -t capoa-build .
+distrobox create --image capoa-build:latest capoa-build
+distrobox enter capoa-build
+
+make <target>
+```
+
+An exception to this is the `docker-build` target, which should be executed from a system where docker/podman is available (not within distrobox).
+
+### Building Docker Images
+
+The project uses a templated approach to generate Dockerfiles for both bootstrap and controlplane providers from a single `Dockerfile.j2` template.
+
+1. Generate the Dockerfiles:
+```sh
+make generate-dockerfiles
+```
+This will create:
+* Dockerfile.bootstrap-provider for the bootstrap provider
+* Dockerfile.controlplane-provider for the controlplane provider
+
+2. Build the Docker images:
+```sh
+make docker-build-all
+```
+
 ## Per host data
 
 Host data will be injected in the host through environment variables.
