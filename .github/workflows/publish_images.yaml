@@ -37,7 +37,7 @@ jobs:
             TAG=latest
           else
             BRANCH_NAME=${GITHUB_REF#refs/heads/}
-            TAG=${BRANCH_NAME//\//-}
+            TAG=$(echo ${BRANCH_NAME} | sed 's/backplane-//g')
           fi
           echo "IMAGE_TAG=${TAG#v}" >> $GITHUB_ENV
           echo "Releasing ${TAG}"
