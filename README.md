@@ -1,16 +1,39 @@
-# Cluster API OpenShift Agent providers
+# Cluster API OpenShift Assisted providers
 
-OpenShift Agent providers are a pair of CAPI providers, bootstrap and controlplane, which objective
-is to install OpenShift on BareMetal.
+This repository contains two Cluster API (CAPI) providers—Bootstrap and Control Plane—that work together to provision OpenShift clusters using the Assisted Installer technology.
 
-## Description
-OpenShift Agent providers install OpenShift on BareMetal without the need of a bootstrap node.
-To achieve this feature, the providers are using Assisted Installer ZTP flow behind the scenes.
+These providers are purpose-built to enable declarative, agent-based deployment of OpenShift clusters through the Cluster API ecosystem.
 
-## Getting Started
+## Overview
+
+The providers leverage a special Assisted Installer's flow that support provisioning nodes via ignition userData (provided by Assisted Installer) applied to standard OpenShift/OKD-compatible OS images.
+This eliminates the need for a bootstrap node or custom LiveISOs.
+
+The flow supports both OpenShift Container Platform (OCP) and OKD clusters by using prebuilt machine images:
+* OKD images: [CentOS Stream CoreOS (SCOS)](https://cloud.centos.org/centos/scos/9/prod/streams/latest/x86_64/)
+* OCP images: [Red Hat CoreOS (RHCOS)](https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/)
+
+Note: The exact RHCOS image version used should match the target OpenShift version.
+
 
 ### Supported Infrastructure Providers
+
+The only officially tested infrastructure provider is Metal³ (CAPM3). However, the implementation is infrastructure-agnostic.
+Other CAPI infrastructure providers should work with minimal or no modification.
+
 * [CAPM3](https://github.com/metal3-io/cluster-api-provider-metal3)
+
+### Components
+
+This project contains two separate providers that operate in tandem:
+
+* Bootstrap Provider (openshiftassisted-bootstrap)
+  Orchestrates the initial provisioning of the cluster nodes using Assisted Installer technology.
+
+* Control Plane Provider (openshiftassisted-controlplane)
+  Manages the OpenShift control plane lifecycle and coordinates with the bootstrap phase to finalize cluster installation.
+
+## Getting Started
 
 ### Prerequisites
 - go version v1.21.0+
