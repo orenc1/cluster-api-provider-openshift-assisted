@@ -14,7 +14,9 @@ jobs:
     env:
       context: "./"
       controlplane_image_name: "cluster-api-controlplane-provider-openshift-assisted"
+      controlplane_dockerfile: "Dockerfile.controlplane-provider"
       bootstrap_image_name: "cluster-api-bootstrap-provider-openshift-assisted"
+      bootstrap_dockerfile: "Dockerfile.bootstrap-provider"
     name: Release
     runs-on: ubuntu-latest
     steps:
@@ -51,11 +53,11 @@ jobs:
           push: true
           context: ${{ env.context }}
           tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.bootstrap_image_name }}:${{env.IMAGE_TAG}}"
-          file: "Dockerfile.bootstrap-provider"
+          file: "${{ env.bootstrap_dockerfile }}"
       - name: Build and publish controplane image to Quay
         uses: docker/build-push-action@v5
         with:
           push: true
           context: ${{ env.context }}
           tags: "${{ secrets.REGISTRY_SERVER }}/${{ secrets.REGISTRY_NAMESPACE }}/${{ env.controlplane_image_name }}:${{env.IMAGE_TAG}}"
-          file: "Dockerfile.controlplane-provider"
+          file: "${{ env.controlplane_dockerfile }}"
