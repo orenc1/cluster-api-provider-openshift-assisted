@@ -79,14 +79,19 @@ func (r *AgentReconciler) setAgentFields(ctx context.Context, agent *aiv1beta1.A
 		return err
 	}
 
-	agent.Spec.Role = role
-	agent.Spec.IgnitionConfigOverrides = ignitionConfigOverrides
-
 	approvable, err := r.canApproveAgent(ctx, agent)
 	if err != nil {
 		return err
 	}
 
+	// Check if any changes are needed
+	if agent.Spec.Role == role &&
+		agent.Spec.IgnitionConfigOverrides == ignitionConfigOverrides &&
+		agent.Spec.Approved == approvable {
+		return nil
+	}
+	agent.Spec.Role = role
+	agent.Spec.IgnitionConfigOverrides = ignitionConfigOverrides
 	agent.Spec.Approved = approvable
 	return r.Client.Update(ctx, agent)
 }
