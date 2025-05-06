@@ -19,12 +19,12 @@ package controller
 import (
 	"context"
 
-	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	testutils "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"

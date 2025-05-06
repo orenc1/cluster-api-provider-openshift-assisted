@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openshift-assisted/cluster-api-agent/bootstrap/internal/ignition"
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/internal/ignition"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	"github.com/openshift-assisted/cluster-api-agent/util"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	"github.com/openshift/assisted-service/models"
 

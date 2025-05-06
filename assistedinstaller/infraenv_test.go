@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/openshift-assisted/cluster-api-agent/test/utils"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

@@ -24,10 +24,10 @@ import (
 	metal3v1beta1 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
 	"github.com/openshift/assisted-service/api/v1beta1"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/auth"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/auth"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/upgrade"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/version"
 
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
@@ -41,8 +41,8 @@ import (
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	testutils "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"

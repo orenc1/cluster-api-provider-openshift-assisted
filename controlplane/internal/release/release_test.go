@@ -3,7 +3,7 @@ package release_test
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
 )
 
 var _ = Describe("Version Validation Functions", func() {

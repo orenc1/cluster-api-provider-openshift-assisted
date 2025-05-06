@@ -46,10 +46,10 @@ To configure clusterctl with the OpenShift Agent providers, edit `~/.cluster-api
 
 ```yaml
   - name: "openshift-agent"
-    url: "https://github.com/openshift-assisted/cluster-api-agent/releases/latest/download/bootstrap-components.yaml"
+    url: "https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/releases/latest/download/bootstrap-components.yaml"
     type: "BootstrapProvider"
   - name: "openshift-agent"
-    url: "https://github.com/openshift-assisted/cluster-api-agent/releases/latest/download/controlplane-components.yaml"
+    url: "https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/releases/latest/download/controlplane-components.yaml"
     type: "ControlPlaneProvider"
 ```
 
@@ -170,7 +170,7 @@ cat <<EOF > bootstrap/kustomization.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-- https://github.com/openshift-assisted/cluster-api-agent/bootstrap/config/default?ref=master
+- https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/config/default?ref=master
 
 patches:
 - patch: |-
@@ -200,7 +200,7 @@ cat <<EOF > controlplane/kustomization.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-- https://github.com/openshift-assisted/cluster-api-agent/controlplane/config/default?ref=master
+- https://github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/config/default?ref=master
 EOF
 ```
 

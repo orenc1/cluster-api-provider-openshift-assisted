@@ -10,7 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/openshift-assisted/cluster-api-agent/pkg/containers"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 )
 
 var _ = Describe("PullSecretKeyChain", func() {

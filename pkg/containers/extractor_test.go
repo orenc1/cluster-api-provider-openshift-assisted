@@ -6,11 +6,11 @@ import (
 	"github.com/golang/mock/gomock"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/openshift-assisted/cluster-api-agent/external_mocks"
-	"github.com/openshift-assisted/cluster-api-agent/util/test"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/external_mocks"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/test"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/openshift-assisted/cluster-api-agent/pkg/containers"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 )
 
 var _ = Describe("ImageInspector", func() {

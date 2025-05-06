@@ -23,10 +23,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 
 	"github.com/pkg/errors"

@@ -24,11 +24,11 @@ import (
 	"net/http/httptest"
 	"strings"
 
-	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
+	testutils "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 	v1beta12 "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	"github.com/openshift/assisted-service/api/v1beta1"
 	v1 "github.com/openshift/hive/apis/hive/v1"
@@ -39,7 +39,7 @@ import (
 	fakeclient "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
 )
 
 const (

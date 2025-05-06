@@ -1,4 +1,4 @@
-module github.com/openshift-assisted/cluster-api-agent
+module github.com/openshift-assisted/cluster-api-provider-openshift-assisted
 
 go 1.23.0
 
