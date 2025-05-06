@@ -9,17 +9,19 @@
     cluster_topology: "{{ lookup('ansible.builtin.env', 'CLUSTER_TOPOLOGY', default='multinode') }}"
     example_manifest: "{{ cluster_topology }}-example.yaml.j2"
     default_assisted_service_image: "quay.io/edge-infrastructure/assisted-service"
+    default_infrastructure_operator_image: "quay.io/edge-infrastructure/assisted-service"
     default_assisted_service_el8_image: "quay.io/edge-infrastructure/assisted-service-el8"
     default_assisted_image_service_image: "quay.io/edge-infrastructure/assisted-image-service"
     default_assisted_installer_agent_image: "quay.io/edge-infrastructure/assisted-installer-agent"
     default_assisted_installer_controller_image: "quay.io/edge-infrastructure/assisted-installer-controller"
     default_assisted_installer_image: "quay.io/edge-infrastructure/assisted-installer"
-    default_assisted_service_version: "sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
-    default_assisted_service_el8_version: "sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
-    default_assisted_image_service_version: "sha256:007f0b23d6e3f52837f44d3b4f02565e0121967e8b64e75dc38ba1b1d48e58c2"
-    default_assisted_installer_agent_version: "sha256:b9cf4a9246eb3eb2d71dc17f6034c875be9c7d63120fa5a683b975dd878e6b20"
-    default_assisted_installer_controller_version: "sha256:6fd6d481b66b78853214fbce28acbd45fd9345480c70b8775078ce44ba3d2ab8"
-    default_assisted_installer_version: "sha256:7c4e456c16d9f1171a8328485e89d63622a5d1bc24c6e553031119b8027f3384"
+    default_assisted_service_el8_version: "sha256:fc5c31be9a528a10485a5d2c7ca82d17cf2a560948e3efa5c0042a5565dc1acf"
+    default_assisted_image_service_version: "sha256:c9c0623baa3d364131720914d68fa6267d8a242af1de3a7c4a46bb1d18a1fac4"
+    default_assisted_installer_agent_version: "sha256:fc1abc80463b74917c09c3f3393b97ea1175c6207de616def2a8a25419049cae"
+    default_assisted_installer_controller_version: "sha256:c707d06e0d232a0a067b30ede5321d3212609dd1281798952866bc4712b4578a"
+    default_infrastructure_operator_version: "sha256:a78af04976f68f4e33b3a53001c959c15b7c350cb2b8836004066a40fd1e261d"
+    default_assisted_installer_version: "sha256:5cf1b47fc8bc129fa5cf109c8b9759b3fdc033643ee4f2f1d8bcdf0de8ddfaca"
+    default_assisted_service_version: "sha256:ef7c53fe1dee4c0a6616c53d7d84c3c9b4051d00048b38d421dcf1ceb6c58aea"
     capi_version: "{{ lookup('ansible.builtin.env', 'CAPI_VERSION', default='v1.9.6') }}"
     capm3_version: "{{ lookup('ansible.builtin.env', 'CAPM3_VERSION', default='v1.9.3') }}"
     dist_dir: "{{ lookup('ansible.builtin.env', 'DIST_DIR') }}"
@@ -29,7 +31,6 @@
     pullsecret: "{{ lookup('ansible.builtin.env', 'PULLSECRET') }}"
     container_tag: "{{ lookup('ansible.builtin.env', 'CONTAINER_TAG', default='local')}}"
     cluster_name: "test-{{cluster_topology}}"
-    upgrade_to_version: "4.19.0-ec.3"
     medium_delay: 10
     medium_retries: 60
     high_delay: 60
@@ -51,4 +52,5 @@
     - bmh_setup
     - cluster_install
     - assert_install
-    - assert_upgrade
+    - role: assert_upgrade
+      when: "upgrade_to_version is defined"
