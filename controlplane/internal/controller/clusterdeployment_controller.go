@@ -24,11 +24,11 @@ import (
 	"slices"
 	"strings"
 
-	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/imageregistry"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
-	"github.com/openshift-assisted/cluster-api-agent/util"
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/imageregistry"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 
 	configv1 "github.com/openshift/api/config/v1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"

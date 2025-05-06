@@ -6,10 +6,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
-	"github.com/openshift-assisted/cluster-api-agent/pkg/containers"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/workloadclient"
 	configv1 "github.com/openshift/api/config/v1"
 
 	"k8s.io/apimachinery/pkg/types"

@@ -21,8 +21,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	testutils "github.com/openshift-assisted/cluster-api-agent/test/utils"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	testutils "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 	"github.com/openshift/assisted-service/api/v1beta1"
 	"github.com/openshift/assisted-service/models"
 	corev1 "k8s.io/api/core/v1"

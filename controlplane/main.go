@@ -21,14 +21,14 @@ import (
 	"flag"
 	"os"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/upgrade"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/workloadclient"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/upgrade"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/workloadclient"
 
-	"github.com/openshift-assisted/cluster-api-agent/pkg/containers"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/version"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/version"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
@@ -46,8 +46,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	controlplanecontroller "github.com/openshift-assisted/cluster-api-agent/controlplane/internal/controller"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	controlplanecontroller "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/controller"
 )
 
 var (

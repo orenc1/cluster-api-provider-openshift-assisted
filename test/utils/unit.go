@@ -3,8 +3,8 @@ package utils
 import (
 	"github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	metal3 "github.com/metal3-io/cluster-api-provider-metal3/api/v1beta1"
-	v1alpha2 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
+	v1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	"github.com/openshift/assisted-service/api/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"

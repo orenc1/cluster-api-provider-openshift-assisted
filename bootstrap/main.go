@@ -21,11 +21,11 @@ import (
 	"flag"
 	"os"
 
-	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
 
 	"github.com/kelseyhightower/envconfig"
 
-	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 
@@ -49,8 +49,8 @@ import (
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
-	"github.com/openshift-assisted/cluster-api-agent/bootstrap/internal/controller"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/internal/controller"
 	//+kubebuilder:scaffold:imports
 )
 

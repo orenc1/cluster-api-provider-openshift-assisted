@@ -22,9 +22,9 @@ import (
 
 	"sigs.k8s.io/cluster-api/util/conditions"
 
-	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	"github.com/openshift-assisted/cluster-api-agent/util"
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	corev1 "k8s.io/api/core/v1"

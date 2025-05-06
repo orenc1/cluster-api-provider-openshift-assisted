@@ -23,8 +23,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	"github.com/openshift-assisted/cluster-api-agent/test/utils"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/test/utils"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	"github.com/openshift/assisted-service/models"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"

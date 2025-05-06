@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	"github.com/openshift-assisted/cluster-api-agent/controlplane/internal/release"
-	"github.com/openshift-assisted/cluster-api-agent/pkg/containers"
+	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 	v1 "github.com/openshift/api/config/v1"
 	imageapi "github.com/openshift/api/image/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"

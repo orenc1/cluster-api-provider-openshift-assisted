@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-agent/controlplane/api/v1alpha2"
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	controlplanev1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clusterv1 "sigs.k8s.io/cluster-api/api/v1beta1"

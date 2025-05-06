@@ -26,14 +26,14 @@ import (
 
 	"github.com/go-logr/logr"
 
-	"github.com/openshift-assisted/cluster-api-agent/assistedinstaller"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
 	"k8s.io/client-go/tools/reference"
 
 	"github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	"github.com/pkg/errors"
 
-	logutil "github.com/openshift-assisted/cluster-api-agent/util/log"
+	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
@@ -44,7 +44,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-agent/bootstrap/api/v1alpha1"
+	bootstrapv1alpha1 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha1"
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

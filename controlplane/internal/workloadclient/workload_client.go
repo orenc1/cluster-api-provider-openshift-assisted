@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/openshift-assisted/cluster-api-agent/util"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
 	configv1 "github.com/openshift/api/config/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
