@@ -3,7 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: capoa-controlplane-controller-manager-metrics-monitor
-  namespace: capoa-system
+  namespace: capoa-controlplane-system
 spec:
   endpoints:
     - path: /metrics
