@@ -3,7 +3,7 @@ resources:
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
-  - name: controller
+  - name: quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted
     newName: quay.io/edge-infrastructure/cluster-api-bootstrap-provider-openshift-assisted
     newTag: local
 
