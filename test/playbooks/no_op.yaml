@@ -1,0 +1,8 @@
+---
+- name: No-op playbook
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Do nothing successfully
+      ansible.builtin.debug:
+        msg: "Dry run completed successfully"
