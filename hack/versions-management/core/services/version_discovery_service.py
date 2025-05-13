@@ -1,17 +1,19 @@
 import hashlib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict
 from datetime import datetime
 from typing import override
-from concurrent.futures import ThreadPoolExecutor
 
 from core.clients.github_client import GitHubClient
 from core.clients.image_registry_client import ImageRegistryClient
-from core.models import Snapshot, SnapshotMetadata, Artifact, Component
+from core.models import Artifact, Component, Snapshot, SnapshotMetadata
 from core.repositories import ReleaseCandidateRepository
 from core.repositories.components_repository import ComponentRepository
 from core.services.service import Service
 from core.utils.logging import setup_logger
+
 
 class VersionDiscoveryService(Service):
     def __init__(self, rc_file_path: str, components_file_path: str, dry_run: bool):
@@ -50,7 +52,7 @@ class VersionDiscoveryService(Service):
         )
 
         if self.dry_run:
-            print(json.dumps(snapshot))
+            print(json.dumps(asdict(snapshot), default=str))
             return
 
         if self.rc_repository.save(snapshot):
@@ -108,4 +110,3 @@ class VersionDiscoveryService(Service):
             f"{c.repository}:{c.ref}:{c.image_url or ''}" for c in sorted_components
         ])
         return hashlib.md5(component_str.encode()).hexdigest()
-
