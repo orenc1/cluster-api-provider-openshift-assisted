@@ -1,7 +1,8 @@
+import json
 import logging
 import os
 from dataclasses import replace
-from typing import override
+from typing import Callable, override
 
 from core.clients.ansible_client import AnsibleClient
 from core.models import Snapshot
@@ -11,10 +12,24 @@ from core.utils.logging import setup_logger
 
 
 class AnsibleTestRunnerService(Service):
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, dry_run: bool = False):
         self.repo: ReleaseCandidateRepository = ReleaseCandidateRepository(file_path)
         self.ansible: AnsibleClient = AnsibleClient()
         self.logger: logging.Logger = setup_logger("AnsibleTestRunnerService")
+        self.dry_run: bool = dry_run
+
+    def get_execution_parameters(self) -> tuple[str, str, Callable[[Snapshot], bool | None]]:
+        if self.dry_run:
+            return (
+                "test/playbooks/no_op.yaml",
+                "test/playbooks/inventories/local_host.yaml",
+                lambda snapshot: print(json.dumps(snapshot))
+            )
+        return (
+            "test/playbooks/run_test.yaml", 
+            "test/playbooks/inventories/remote_host.yaml",
+            lambda snapshot: self.repo.update(snapshot)
+        )
 
     @override
     def run(self) -> None:
@@ -25,16 +40,17 @@ class AnsibleTestRunnerService(Service):
             self.logger.info("No pending snapshot found")
             return
 
+        playbook, inventory, on_success = self.get_execution_parameters()
         self.export_env(pending_snapshot)
 
         try:
-            self.ansible.run_playbook("test/playbooks/run_test.yaml", "test/playbooks/inventories/remote_host.yaml")
+            self.ansible.run_playbook(playbook, inventory)
             updated = replace(pending_snapshot.metadata, status="successful")
         except Exception:
             updated = replace(pending_snapshot.metadata, status="failed")
 
         updated_snapshot = Snapshot(metadata=updated, artifacts=pending_snapshot.artifacts)
-        self.repo.update(updated_snapshot)
+        on_success(updated_snapshot)
         
 
     def export_env(self, snapshot: Snapshot) -> None:

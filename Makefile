@@ -90,6 +90,18 @@ e2e-test-dependencies:
 e2e-test: e2e-test-dependencies
 	ansible-playbook $(PLAYBOOK_DIR)/run_test.yaml -i $(PLAYBOOK_DIR)/inventories/remote_host.yaml
 
+.PHONY: snapshots-test
+snapshots-test: e2e-test-dependencies
+	DRY_RUN=$(DRY_RUN) bash hack/versions-management/ansible_test_runner.sh
+
+.PHONY: version-discovery
+version-discovery:
+	DRY_RUN=$(DRY_RUN) bash hack/versions-management/version_discovery.sh
+
+.PHONY: tags-reconciliation
+tags-reconciliation:
+	DRY_RUN=$(DRY_RUN) bash hack/versions-management/tag_reconciler.sh
+
 .PHONY: ansible-lint
 ansible-lint:
 	ansible-lint $(PLAYBOOK_DIR)

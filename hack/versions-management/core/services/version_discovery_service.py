@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 from datetime import datetime
 from typing import override
@@ -13,11 +14,12 @@ from core.services.service import Service
 from core.utils.logging import setup_logger
 
 class VersionDiscoveryService(Service):
-    def __init__(self, rc_file_path: str, components_file_path: str):
+    def __init__(self, rc_file_path: str, components_file_path: str, dry_run: bool):
         self.github: GitHubClient = GitHubClient()
         self.registry: ImageRegistryClient = ImageRegistryClient()
         self.rc_repository: ReleaseCandidateRepository = ReleaseCandidateRepository(rc_file_path)
         self.components_repository: ComponentRepository = ComponentRepository(components_file_path)
+        self.dry_run: bool = dry_run
         self.logger: logging.Logger = setup_logger("VersionDiscoveryService")
 
     @override
@@ -46,6 +48,10 @@ class VersionDiscoveryService(Service):
             ),
             artifacts=artifacts,
         )
+
+        if self.dry_run:
+            print(json.dumps(snapshot))
+            return
 
         if self.rc_repository.save(snapshot):
             self.logger.info(f"Snapshot {snapshot.metadata.id} has been saved successfully.")
