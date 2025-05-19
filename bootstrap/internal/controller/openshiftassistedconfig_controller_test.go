@@ -171,7 +171,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 		When("ClusterDeployment and AgentClusterInstall are not created yet", func() {
 			It("should wait with no error", func() {
 				// Given
-				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+				oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 				// and OpenshiftAssistedControlPlane provider did not create CD and ACI
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -188,7 +188,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 		})
 		When("ClusterDeployment is created but AgentClusterInstall is not", func() {
 			It("should requeue the request without errors", func() {
-				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+				oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 				cd := testutils.NewClusterDeploymentWithOwnerCluster(namespace, clusterName, clusterName)
 				Expect(k8sClient.Create(ctx, cd)).To(Succeed())
 				// but not ACI
@@ -208,7 +208,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 		})
 		When("ClusterDeployment and AgentClusterInstall are already created", func() {
 			It("should create infraenv with a CreatedAt time not past cooldown", func() {
-				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+				oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 				mockControlPlaneInitialization(ctx, k8sClient)
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -229,7 +229,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 			"InfraEnv, ClusterDeployment and AgentClusterInstall are already created but no eventsURL has been generated",
 			func() {
 				It("fail reconciliation", func() {
-					oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+					oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 					mockControlPlaneInitialization(ctx, k8sClient)
 
 					infraEnv := testutils.NewInfraEnv(namespace, machineName)
@@ -262,7 +262,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 						HttpClient: server.Client(),
 					}
 
-					oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+					oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 					mockControlPlaneInitialization(ctx, k8sClient)
 					infraEnv := testutils.NewInfraEnv(namespace, machineName)
 					Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
@@ -291,15 +291,11 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 		When("a pull secret is not referenced in the OpenshiftAssistedConfig", func() {
 			It("should generate a fake pull secret and reference it in the infraenv", func() {
 
-				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient, nil)
 				mockControlPlaneInitialization(ctx, k8sClient)
 
 				oac.Spec.PullSecretRef = nil // Ensure no pull secret is referenced
 				Expect(k8sClient.Update(ctx, oac)).To(Succeed())
-
-				infraEnv := testutils.NewInfraEnv(namespace, machineName)
-				infraEnv.Status.CreatedTime = nil
-				Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
 
 				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(oac),
@@ -315,11 +311,14 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 				Expect(secret.Data).To(HaveKey(".dockerconfigjson"))
 
 				// Verify that the pull secret is referenced in the infraEnv, but not in the config
-				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(infraEnv), infraEnv)).To(Succeed())
-				Expect(infraEnv.Spec.PullSecretRef).NotTo(BeNil())
-				Expect(infraEnv.Spec.PullSecretRef.Name).To(Equal("placeholder-pull-secret"))
 				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(oac), oac)).To(Succeed())
 				Expect(oac.Spec.PullSecretRef).To(BeNil())
+				Expect(oac.Status.InfraEnvRef).NotTo(BeNil())
+
+				infraEnv := &v1beta1.InfraEnv{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Name: oac.Status.InfraEnvRef.Name, Namespace: namespace}, infraEnv)).To(Succeed())
+				Expect(infraEnv.Spec.PullSecretRef).NotTo(BeNil())
+				Expect(infraEnv.Spec.PullSecretRef.Name).To(Equal("placeholder-pull-secret"))
 			})
 		})
 		When(
@@ -353,7 +352,7 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 						},
 					}
 
-					oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient)
+					oac := setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(ctx, k8sClient)
 					mockControlPlaneInitialization(ctx, k8sClient)
 					infraEnv := testutils.NewInfraEnv(namespace, machineName)
 					Expect(k8sClient.Create(ctx, infraEnv)).To(Succeed())
@@ -425,6 +424,7 @@ func mockControlPlaneInitialization(ctx context.Context, k8sClient client.Client
 func setupControlPlaneOpenshiftAssistedConfig(
 	ctx context.Context,
 	k8sClient client.Client,
+	pullSecretRef *corev1.LocalObjectReference,
 ) *bootstrapv1alpha1.OpenshiftAssistedConfig {
 	cluster := testutils.NewCluster(clusterName, namespace)
 	Expect(k8sClient.Create(ctx, cluster)).To(Succeed())
@@ -438,7 +438,7 @@ func setupControlPlaneOpenshiftAssistedConfig(
 	Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(machine), machine)).To(Succeed())
 
 	oac := NewOpenshiftAssistedConfigWithOwner(namespace, oacName, clusterName, machine)
-	oac.Spec.PullSecretRef = &corev1.LocalObjectReference{Name: "my-pullsecret"}
+	oac.Spec.PullSecretRef = pullSecretRef
 	oac.Spec.Proxy = &v1beta1.Proxy{
 		HTTPProxy:  "http://myproxy.com",
 		HTTPSProxy: "https://myproxy.com",
@@ -468,6 +468,14 @@ func setupControlPlaneOpenshiftAssistedConfig(
 	oac.Spec.OSImageVersion = "4.14.0"
 	Expect(k8sClient.Create(ctx, oac)).To(Succeed())
 	return oac
+}
+
+func setupControlPlaneOpenshiftAssistedConfigWithPullSecretRef(
+	ctx context.Context,
+	k8sClient client.Client,
+) *bootstrapv1alpha1.OpenshiftAssistedConfig {
+	pullSecretRef := &corev1.LocalObjectReference{Name: "my-pullsecret"}
+	return setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient, pullSecretRef)
 }
 
 func NewOpenshiftAssistedConfigWithOwner(

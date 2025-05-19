@@ -24,13 +24,14 @@ import (
 	"net/url"
 	"time"
 
+	"k8s.io/client-go/tools/reference"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
 
 	"github.com/go-logr/logr"
 
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/assistedinstaller"
-	"k8s.io/client-go/tools/reference"
-
 	"github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	"github.com/pkg/errors"
@@ -179,65 +180,13 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 
 		return ctrl.Result{Requeue: true, RequeueAfter: retryAfter}, nil
 	}
-	// Get the Machine that owns this openshiftassistedconfig
-	machine, err := capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
-	if err != nil {
-		log.Error(err, "couldn't get machine associated with openshiftassistedconfig", "name", config.Name)
-		return ctrl.Result{}, err
-	}
 
-	clusterDeployment, err := r.getClusterDeployment(ctx, cluster.GetName())
-	if err != nil {
-		log.V(logutil.InfoLevel).Info("could not retrieve ClusterDeployment... requeuing", "cluster", cluster.GetName())
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
-			clusterv1.ConditionSeverityInfo,
-			"",
-		)
-		return ctrl.Result{Requeue: true}, nil
+	// make sure Assisted Installer resources are reconciled. When they are, we'll get the infraEnv
+	// as it's necessary to retrieve ignition from it
+	infraEnv, result, err := r.reconcileAssistedResources(ctx, config, cluster)
+	if infraEnv == nil {
+		return result, err
 	}
-
-	aci, err := r.getAgentClusterInstall(ctx, clusterDeployment)
-	if err != nil {
-		log.V(logutil.InfoLevel).Info("could not retrieve AgentClusterInstall... requeuing")
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
-			clusterv1.ConditionSeverityInfo,
-			"",
-		)
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	// if added worker after start install, will be treated as day2
-	if !capiutil.IsControlPlaneMachine(machine) &&
-		!(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
-		log.V(logutil.DebugLevel).Info("not controlplane machine and installation already started, requeuing")
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.WaitingForInstallCompleteReason,
-			clusterv1.ConditionSeverityInfo,
-			"",
-		)
-		return ctrl.Result{Requeue: true, RequeueAfter: 60 * time.Second}, nil
-	}
-
-	infraEnv, err := r.ensureInfraEnv(ctx, config, machine, clusterDeployment)
-	if err != nil {
-		conditions.MarkFalse(
-			config,
-			bootstrapv1alpha1.DataSecretAvailableCondition,
-			bootstrapv1alpha1.InfraEnvFailedReason,
-			clusterv1.ConditionSeverityWarning,
-			"",
-		)
-		return ctrl.Result{}, err
-	}
-	log.V(logutil.DebugLevel).Info("infraenv detected", "infraEnv", infraEnv.Name)
 
 	s := &corev1.Secret{}
 	if err := r.Get(ctx, getSecretObjectKey(config), s); !apierrors.IsNotFound(err) && config.Status.Ready {
@@ -258,7 +207,6 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, fmt.Errorf("infraenv not ready yet. CreatedTime: %v", infraEnv.Status.CreatedTime)
 	}
 
-	// If created time on infraenv is set, check that cooldown period has passed
 	ignition, err := r.getIgnition(ctx, infraEnv, log)
 	if err != nil {
 		log.V(logutil.TraceLevel).Info("error retrieving ignition", "err", err)
@@ -336,63 +284,53 @@ func (r *OpenshiftAssistedConfigReconciler) ensureInfraEnv(ctx context.Context, 
 
 	getInfraEnvErr := r.Get(ctx, types.NamespacedName{Name: infraEnvName, Namespace: config.Namespace}, &ie)
 
-	// return error if the error is not NotFound
-	if getInfraEnvErr != nil && !apierrors.IsNotFound(getInfraEnvErr) {
-		return &ie, getInfraEnvErr
-	}
-
-	// if infraEnv already exists, make sure it already has pullSecretRef
-	if getInfraEnvErr == nil && ie.Spec.PullSecretRef != nil {
+	// if found, no need to reconcile, as the OpenshiftAssistedConfig it's immutable
+	if getInfraEnvErr == nil {
+		log.V(logutil.TraceLevel).Info("infraenv already exists", "name", ie.Name, "namespace", ie.Namespace)
 		return &ie, nil
 	}
 
-	// if pullsecret ref is not set, create a new secret
-	if getInfraEnvErr == nil && ie.Spec.PullSecretRef == nil {
-		if err := r.createPullSecretSecretAndRefInfraEnv(ctx, config, &ie); err != nil {
-			return &ie, err
-		}
-		return &ie, r.Client.Update(ctx, &ie)
+	// return error if the error is not NotFound
+	if !apierrors.IsNotFound(getInfraEnvErr) {
+		return &ie, getInfraEnvErr
 	}
 
-	// if infraEnv does not exist and does not have pullSecretRef, create it
+	// if not found, create InfraEnv
 	infraEnv := assistedinstaller.GetInfraEnvFromConfig(infraEnvName, config, clusterDeployment)
+
+	// if pullsecret ref is not set, create a fake secret.
+	// Assisted Installer requires a pull secret to be set, as it's geared towards OCP
+	// To improve UX for OKD users, we will create a fake pull secret
 	if infraEnv.Spec.PullSecretRef == nil {
-		if err := r.createPullSecretSecretAndRefInfraEnv(ctx, config, infraEnv); err != nil {
-			return infraEnv, err
+		secret, err := r.createPullsecretSecret(ctx, config)
+		if err != nil {
+			return &ie, err
+		}
+		infraEnv.Spec.PullSecretRef = &corev1.LocalObjectReference{
+			Name: secret.Name,
 		}
 	}
+
 	_ = controllerutil.SetOwnerReference(config, infraEnv, r.Scheme)
 	_ = controllerutil.SetOwnerReference(machine, infraEnv, r.Scheme)
 	err := r.Client.Create(ctx, infraEnv)
 	if err != nil && !apierrors.IsAlreadyExists(err) {
-		log.V(logutil.DebugLevel).Error(err, "infra env error", "name", infraEnv.Name, "namespace", infraEnv.Namespace)
-		// something went wrong, let's not exist because we might be able to read it and reference it in the status
+		return infraEnv, err
 	}
 
-	// Set infraEnv if not already set
-	if config.Status.InfraEnvRef == nil {
-		ref, err := reference.GetReference(r.Scheme, infraEnv)
-		if err != nil {
-			return infraEnv, err
-		}
-		config.Status.InfraEnvRef = ref
-	}
 	return infraEnv, nil
 }
 
-func (r *OpenshiftAssistedConfigReconciler) createPullSecretSecretAndRefInfraEnv(ctx context.Context, config *bootstrapv1alpha1.OpenshiftAssistedConfig, ie *aiv1beta1.InfraEnv) error {
+func (r *OpenshiftAssistedConfigReconciler) createPullsecretSecret(ctx context.Context, config *bootstrapv1alpha1.OpenshiftAssistedConfig) (*corev1.Secret, error) {
 	secret := assistedinstaller.GenerateFakePullSecret("", config.Namespace)
 	if err := controllerutil.SetOwnerReference(config, secret, r.Scheme); err != nil {
-		return err
+		return secret, err
 	}
 	if err := r.Client.Create(ctx, secret); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+		return secret, err
 	}
 
-	ie.Spec.PullSecretRef = &corev1.LocalObjectReference{
-		Name: secret.Name,
-	}
-	return nil
+	return secret, nil
 }
 
 // Retrieve AgentClusterInstall by ClusterDeployment.Spec.ClusterInstallRef
@@ -521,10 +459,12 @@ func (r *OpenshiftAssistedConfigReconciler) SetupWithManager(mgr ctrl.Manager) e
 
 // Filter infraEnv to be relevant  by this openshiftassistedconfig
 func (r *OpenshiftAssistedConfigReconciler) FilterInfraEnv(ctx context.Context, o client.Object) []ctrl.Request {
+	logger := log.FromContext(ctx)
 	result := []ctrl.Request{}
 	infraEnv, ok := o.(*aiv1beta1.InfraEnv)
 	if !ok {
-		panic(fmt.Sprintf("Expected an InfraEnv but got a %T", o))
+		logger.V(logutil.TraceLevel).Info("not an InfraEnv, skipping", "object", o.GetName())
+		return result
 	}
 	config := &bootstrapv1alpha1.OpenshiftAssistedConfig{}
 	if err := util.GetTypedOwner(ctx, r.Client, infraEnv, config); err != nil {
@@ -536,13 +476,14 @@ func (r *OpenshiftAssistedConfigReconciler) FilterInfraEnv(ctx context.Context, 
 }
 
 // Filter machine owned by this openshiftassistedconfig
-func (r *OpenshiftAssistedConfigReconciler) FilterMachine(_ context.Context, o client.Object) []ctrl.Request {
+func (r *OpenshiftAssistedConfigReconciler) FilterMachine(ctx context.Context, o client.Object) []ctrl.Request {
+	logger := log.FromContext(ctx)
 	result := []ctrl.Request{}
 	m, ok := o.(*clusterv1.Machine)
 	if !ok {
-		panic(fmt.Sprintf("Expected a Machine but got a %T", o))
+		logger.V(logutil.TraceLevel).Info("not a Machine, skipping", "object", o.GetName())
+		return result
 	}
-	// m.Spec.ClusterName
 
 	if m.Spec.Bootstrap.ConfigRef != nil &&
 		m.Spec.Bootstrap.ConfigRef.GroupVersionKind() == bootstrapv1alpha1.GroupVersion.WithKind(
@@ -552,4 +493,76 @@ func (r *OpenshiftAssistedConfigReconciler) FilterMachine(_ context.Context, o c
 		result = append(result, ctrl.Request{NamespacedName: name})
 	}
 	return result
+}
+
+func (r *OpenshiftAssistedConfigReconciler) reconcileAssistedResources(ctx context.Context, config *bootstrapv1alpha1.OpenshiftAssistedConfig, cluster *clusterv1.Cluster) (*aiv1beta1.InfraEnv, ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	// Get the Machine that owns this openshiftassistedconfig
+	machine, err := capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
+	if err != nil {
+		logger.Error(err, "couldn't get machine associated with openshiftassistedconfig", "name", config.Name)
+		return nil, ctrl.Result{}, err
+	}
+
+	clusterDeployment, err := r.getClusterDeployment(ctx, cluster.GetName())
+	if err != nil {
+		logger.V(logutil.InfoLevel).Info("could not retrieve ClusterDeployment... requeuing", "cluster", cluster.GetName())
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
+		return nil, ctrl.Result{Requeue: true}, nil
+	}
+
+	aci, err := r.getAgentClusterInstall(ctx, clusterDeployment)
+	if err != nil {
+		logger.V(logutil.InfoLevel).Info("could not retrieve AgentClusterInstall... requeuing")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForAssistedInstallerReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
+		return nil, ctrl.Result{Requeue: true}, nil
+	}
+
+	// if added worker after start install, will be treated as day2
+	if !capiutil.IsControlPlaneMachine(machine) &&
+		!(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
+		logger.V(logutil.DebugLevel).Info("not controlplane machine and installation already started, requeuing")
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.WaitingForInstallCompleteReason,
+			clusterv1.ConditionSeverityInfo,
+			"",
+		)
+		return nil, ctrl.Result{Requeue: true, RequeueAfter: 60 * time.Second}, nil
+	}
+
+	infraEnv, err := r.ensureInfraEnv(ctx, config, machine, clusterDeployment)
+	if err != nil {
+		conditions.MarkFalse(
+			config,
+			bootstrapv1alpha1.DataSecretAvailableCondition,
+			bootstrapv1alpha1.InfraEnvFailedReason,
+			clusterv1.ConditionSeverityWarning,
+			"",
+		)
+		return nil, ctrl.Result{}, err
+	}
+
+	// Set infraEnv ref if not already set
+	if config.Status.InfraEnvRef == nil {
+		ref, err := reference.GetReference(r.Scheme, infraEnv)
+		if err != nil {
+			return nil, ctrl.Result{}, err
+		}
+		config.Status.InfraEnvRef = ref
+	}
+	return infraEnv, ctrl.Result{}, nil
 }

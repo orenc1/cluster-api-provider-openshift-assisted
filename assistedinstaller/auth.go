@@ -2,7 +2,7 @@ package assistedinstaller
 
 import (
 	v1 "k8s.io/api/core/v1"
-	v2 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -22,7 +22,7 @@ func GenerateFakePullSecret(name, namespace string) *v1.Secret {
 	fakePullSecret := "{\"auths\":{\"fake-pull-secret\":{\"auth\":\"cGxhY2Vob2xkZXI6c2VjcmV0Cg==\"}}}"
 
 	return &v1.Secret{
-		ObjectMeta: v2.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
