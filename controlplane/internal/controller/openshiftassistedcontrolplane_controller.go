@@ -29,6 +29,7 @@ import (
 	bootstrapv1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha2"
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/auth"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/kubevirt"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/upgrade"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/version"
@@ -185,8 +186,20 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
 	}
 	if !isInfrastructureProvisioned(cluster) {
-		log.V(logutil.DebugLevel).Info("infrastructure not provisioned")
-		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
+		// For KubeVirt platform: CAPK (built against CAPI v1beta1) may not properly
+		// set the v1beta2 infrastructureProvisioned field. Check the KubevirtCluster
+		// directly and patch the Cluster status if it's ready.
+		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+			if patched, patchErr := r.patchInfrastructureProvisionedIfReady(ctx, cluster); patchErr != nil {
+				log.Error(patchErr, "failed to check/patch infrastructure provisioned status")
+			} else if patched {
+				log.Info("patched Cluster status with infrastructureProvisioned=true")
+			}
+		}
+		if !isInfrastructureProvisioned(cluster) {
+			log.V(logutil.DebugLevel).Info("infrastructure not provisioned")
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
+		}
 	}
 	log.V(logutil.TraceLevel).Info("infra provisioned")
 
@@ -231,7 +244,48 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 }
 
 func isInfrastructureProvisioned(cluster *clusterv1.Cluster) bool {
-	return cluster.Status.Initialization.InfrastructureProvisioned != nil && *(cluster.Status.Initialization.InfrastructureProvisioned)
+	if cluster.Status.Initialization.InfrastructureProvisioned != nil {
+		return *cluster.Status.Initialization.InfrastructureProvisioned
+	}
+	for _, c := range cluster.Status.Conditions {
+		if c.Type == clusterv1.ClusterInfrastructureReadyCondition {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// patchInfrastructureProvisionedIfReady checks if the infrastructure cluster resource
+// (e.g., KubevirtCluster) is ready and patches the CAPI Cluster's initialization status.
+// This works around CAPK (v1beta1) not properly setting the v1beta2 field.
+func (r *OpenshiftAssistedControlPlaneReconciler) patchInfrastructureProvisionedIfReady(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	infraRef := cluster.Spec.InfrastructureRef
+	if infraRef.Kind == "" || infraRef.Name == "" {
+		return false, nil
+	}
+
+	infraObj := &unstructured.Unstructured{}
+	infraObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   infraRef.APIGroup,
+		Version: "v1alpha1",
+		Kind:    infraRef.Kind,
+	})
+
+	if err := r.Get(ctx, types.NamespacedName{Name: infraRef.Name, Namespace: cluster.Namespace}, infraObj); err != nil {
+		return false, err
+	}
+
+	ready, _, _ := unstructured.NestedBool(infraObj.Object, "status", "ready")
+	if !ready {
+		return false, nil
+	}
+
+	trueVal := true
+	cluster.Status.Initialization.InfrastructureProvisioned = &trueVal
+	if err := r.Status().Update(ctx, cluster); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func getArchitectureFromBootstrapConfigs(ctx context.Context, k8sClient client.Client, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane) (string, error) {
@@ -427,8 +481,11 @@ func (r *OpenshiftAssistedControlPlaneReconciler) handleDeletion(ctx context.Con
 
 func (r *OpenshiftAssistedControlPlaneReconciler) computeDesiredMachine(oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, name string, cluster *clusterv1.Cluster, failureDomain string) *clusterv1.Machine {
 	var machineUID types.UID
-	annotations := map[string]string{
-		"bmac.agent-install.openshift.io/role": "master",
+	annotations := map[string]string{}
+
+	// Only set the BMAC role annotation for BareMetal platform (Metal3/CAPM3)
+	if oacp.Spec.Config.Platform == "" || oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformBareMetal {
+		annotations["bmac.agent-install.openshift.io/role"] = "master"
 	}
 
 	// Creating a new machine
@@ -516,15 +573,23 @@ func (r *OpenshiftAssistedControlPlaneReconciler) ensureClusterDeployment(
 			Name:    oacp.Name,
 		}
 		cd.Spec.BaseDomain = oacp.Spec.Config.BaseDomain
-		cd.Spec.Platform = hivev1.Platform{
-			AgentBareMetal: &agent.BareMetalPlatform{},
-		}
+		cd.Spec.Platform = clusterDeploymentPlatform(oacp.Spec.Config.Platform)
 		cd.Spec.PullSecretRef = oacp.Spec.Config.PullSecretRef
 
 		return nil
 	})
 
 	return err
+}
+
+// clusterDeploymentPlatform returns the Hive Platform spec for the ClusterDeployment.
+// All assisted-installer deployments use AgentBareMetal at the ClusterDeployment level
+// regardless of the actual infrastructure provider. The real platform differentiation
+// happens at the AgentClusterInstall.Spec.PlatformType level.
+func clusterDeploymentPlatform(_ controlplanev1alpha3.PlatformType) hivev1.Platform {
+	return hivev1.Platform{
+		AgentBareMetal: &agent.BareMetalPlatform{},
+	}
 }
 
 func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.Context, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, cluster *clusterv1.Cluster) error {
@@ -539,6 +604,20 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 	desiredReplicas := int(oacp.Spec.Replicas)
 	machinesToCreate := desiredReplicas - numMachines
 	if machinesToCreate > 0 {
+		// For KubeVirt platform, serialize machine creation to avoid a race condition
+		// where multiple VMs boot simultaneously and some fail to read their config drive.
+		// Only create the next machine once all existing machines have their bootstrap
+		// data secret populated (DataSecretName set by CAPI Machine controller).
+		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt && numMachines > 0 {
+			for _, m := range machines {
+				if m.Spec.Bootstrap.DataSecretName == nil {
+					log.V(logutil.DebugLevel).Info("KubeVirt: waiting for existing machine bootstrap data before creating next machine",
+						"machine", m.Name)
+					return nil
+				}
+			}
+		}
+
 		fd, err := failuredomains.NextFailureDomainForScaleUp(ctx, cluster, machines)
 		if err != nil {
 			return fmt.Errorf("failed to find failure domain for scale up: %v", err)
@@ -559,6 +638,64 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 			return fmt.Errorf("failed to scale down control plane: %v", err)
 		}
 		log.V(logutil.InfoLevel).Info("creating controlplane machine", "machine name", machine.Name)
+	}
+
+	// For KubeVirt platform, detect VMs that booted but failed to process their
+	// Ignition config due to a race condition in initramfs: Ignition's config drive
+	// detection can timeout before udev finishes probing the virtio device's filesystem
+	// label. Recovery deletes both the VMI and root disk PVC to force a fresh boot
+	// (Ignition only processes config on first boot, so the disk must be reimported).
+	if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+		// Build set of VM names that already have registered agents (skip recovery for these)
+		registeredAgentHosts := make(map[string]bool)
+		agentList := &unstructured.UnstructuredList{}
+		agentList.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "agent-install.openshift.io",
+			Version: "v1beta1",
+			Kind:    "AgentList",
+		})
+		if err := r.List(ctx, agentList, client.InNamespace(oacp.Namespace)); err == nil {
+			for _, agent := range agentList.Items {
+				hostname, _, _ := unstructured.NestedString(agent.Object, "status", "inventory", "hostname")
+				if hostname != "" {
+					registeredAgentHosts[hostname] = true
+				}
+			}
+		}
+
+		for _, m := range machines {
+			if m.Spec.Bootstrap.DataSecretName == nil {
+				continue
+			}
+			if conditions.IsTrue(m, clusterv1.MachineReadyCondition) {
+				continue
+			}
+			if registeredAgentHosts[m.Name] {
+				continue
+			}
+			vmNamespace := oacp.Namespace
+			if oacp.Spec.MachineTemplate.InfrastructureRef.Name != "" {
+				kvMachine := &unstructured.Unstructured{}
+				kvMachine.SetGroupVersionKind(schema.GroupVersionKind{
+					Group:   "infrastructure.cluster.x-k8s.io",
+					Version: "v1alpha1",
+					Kind:    "KubevirtMachine",
+				})
+				if err := r.Get(ctx, client.ObjectKey{Name: m.Name, Namespace: m.Namespace}, kvMachine); err == nil {
+					if ns, _, _ := unstructured.NestedString(kvMachine.Object, "spec", "virtualMachineTemplate", "metadata", "namespace"); ns != "" {
+						vmNamespace = ns
+					}
+				}
+			}
+
+			recovered, err := kubevirt.RecoverStaleVM(ctx, r.Client, m.Name, vmNamespace)
+			if err != nil {
+				log.Error(err, "failed to check/recover stale VM", "machine", m.Name)
+			}
+			if recovered {
+				log.V(logutil.InfoLevel).Info("triggered full recovery for VM that missed Ignition config", "machine", m.Name)
+			}
+		}
 	}
 
 	log.V(logutil.DebugLevel).Info("updating replica status", "oacp", oacp, "machines", machines)
@@ -599,6 +736,19 @@ func (r *OpenshiftAssistedControlPlaneReconciler) scaleUpControlPlane(ctx contex
 		}
 		return nil, err
 	}
+
+	// The CAPI CRD on this cluster uses v1beta1 ObjectReference schema (with apiVersion)
+	// rather than v1beta2 ContractVersionedObjectReference (with apiGroup). The Go types
+	// set APIGroup, but the CRD strips it since that field doesn't exist in its schema.
+	// Patch the Machine to set apiVersion on both refs so the CAPI controller can resolve them.
+	patchData := fmt.Sprintf(`{"spec":{"bootstrap":{"configRef":{"apiVersion":"%s"}},"infrastructureRef":{"apiVersion":"%s"}}}`,
+		bootstrapv1alpha2.GroupVersion.String(),
+		infraObj.GroupVersionKind().GroupVersion().String(),
+	)
+	if patchErr := r.Patch(ctx, machine, client.RawPatch(types.MergePatchType, []byte(patchData))); patchErr != nil {
+		ctrl.LoggerFrom(ctx).Error(patchErr, "failed to patch Machine apiVersion refs", "machine", machine.Name)
+	}
+
 	return machine, nil
 }
 
@@ -714,6 +864,8 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateMachine(ctx context.Co
 }
 
 func (r *OpenshiftAssistedControlPlaneReconciler) createInfraMachine(ctx context.Context, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, machineName, clusterName string) (*unstructured.Unstructured, clusterv1.ContractVersionedObjectReference, error) {
+	log := ctrl.LoggerFrom(ctx)
+
 	// Since the cloned resource should eventually have a controller ref for the Machine, we create an
 	// OwnerReference here without the Controller field set
 	infraCloneOwner := &metav1.OwnerReference{
@@ -753,6 +905,19 @@ func (r *OpenshiftAssistedControlPlaneReconciler) createInfraMachine(ctx context
 		setConditionFalse(oacp, controlplanev1alpha3.MachinesCreatedCondition, controlplanev1alpha3.InfrastructureTemplateCloningFailedReason,
 			"error generating infrastructure clone: %v", err)
 		return nil, clusterv1.ContractVersionedObjectReference{}, err
+	}
+
+	// For KubeVirt platform, enforce correct networking configuration on the cloned
+	// infrastructure machine before creation. This ensures bridge binding, the OVN DHCP
+	// annotation, and correct eviction strategy regardless of the template's settings.
+	if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+		if err := kubevirt.EnforceNetworkingRequirements(infraMachine, oacp.Spec.Config.KubeVirt); err != nil {
+			log.Error(err, "failed to enforce networking requirements on infrastructure machine")
+			setConditionFalse(oacp, controlplanev1alpha3.MachinesCreatedCondition, controlplanev1alpha3.InfrastructureTemplateCloningFailedReason,
+				"error enforcing networking requirements: %v", err)
+			return nil, clusterv1.ContractVersionedObjectReference{}, err
+		}
+		log.V(logutil.InfoLevel).Info("enforced bridge networking requirements on infrastructure machine", "machine", machineName)
 	}
 
 	if err := r.Create(ctx, infraMachine); err != nil {
@@ -796,6 +961,20 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfi
 		}
 	}
 
+	spec := *oacp.Spec.OpenshiftAssistedConfigSpec.DeepCopy()
+
+	// Inherit PullSecretRef from Config if not explicitly set in OpenshiftAssistedConfigSpec.
+	// Users typically set spec.config.pullSecretRef (for ClusterDeployment) and expect it
+	// to also apply to InfraEnv creation via the OAC.
+	if spec.PullSecretRef == nil && oacp.Spec.Config.PullSecretRef != nil {
+		spec.PullSecretRef = oacp.Spec.Config.PullSecretRef.DeepCopy()
+	}
+
+	// Inherit SSHAuthorizedKey from Config if not explicitly set.
+	if spec.SSHAuthorizedKey == "" && oacp.Spec.Config.SSHAuthorizedKey != "" {
+		spec.SSHAuthorizedKey = oacp.Spec.Config.SSHAuthorizedKey
+	}
+
 	bootstrapConfig := &bootstrapv1alpha2.OpenshiftAssistedConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -803,7 +982,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfi
 			Labels:      labels,
 			Annotations: annotations,
 		},
-		Spec: *oacp.Spec.OpenshiftAssistedConfigSpec.DeepCopy(),
+		Spec: spec,
 	}
 
 	_ = controllerutil.SetOwnerReference(oacp, bootstrapConfig, r.Scheme)

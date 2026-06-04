@@ -547,8 +547,11 @@ var _ = Describe("Ignition utils", func() {
 			merged, err := MergeIgnitionConfig(logr.Discard(), []byte(baseIgnition), opts)
 			Expect(err).NotTo(HaveOccurred())
 
-			// When no options are set, base is returned unchanged
-			Expect(merged).To(Equal([]byte(baseIgnition)))
+			// With empty opts, only the always-included firstboot karg removal unit should be present
+			cfg, _, err := config_31.Parse(merged)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Systemd.Units).To(HaveLen(1))
+			Expect(cfg.Systemd.Units[0].Name).To(Equal("capoa-remove-firstboot-karg.service"))
 		})
 	})
 
@@ -646,9 +649,10 @@ var _ = Describe("Ignition utils", func() {
 			Expect(rep.Entries).To(BeNil())
 			Expect(err).NotTo(HaveOccurred())
 
-			// With empty opts, no units should be present
-			Expect(cfg.Systemd.Units).To(BeEmpty())
-			// No installed-node files should be present
+			// With empty opts, only the always-included firstboot karg removal unit should be present
+			Expect(cfg.Systemd.Units).To(HaveLen(1))
+			Expect(cfg.Systemd.Units[0].Name).To(Equal("capoa-remove-firstboot-karg.service"))
+			// No configdrive or kubelet-customlabels files should be present
 			for _, file := range cfg.Storage.Files {
 				Expect(file.Path).NotTo(Equal("/usr/local/bin/configdrive_metadata"))
 				Expect(file.Path).NotTo(Equal("/usr/local/bin/kubelet_custom_labels"))

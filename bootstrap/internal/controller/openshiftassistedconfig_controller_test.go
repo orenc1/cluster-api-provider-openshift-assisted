@@ -298,21 +298,21 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 					})
 					Expect(err).To(BeNil())
 
-					secret := corev1.Secret{}
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(oac), &secret)).To(Succeed())
-					Expect(len(secret.Data)).To(Equal(2))
-					format, ok := secret.Data["format"]
-					Expect(ok).To(BeTrue())
-					Expect(string(format)).To(Equal("ignition"))
-					ignition, ok := secret.Data["value"]
-					Expect(ok).To(BeTrue())
-					Expect(string(ignition)).ToNot(BeEmpty())
-					Expect(string(ignition)).To(Equal(mockResponse))
+				secret := corev1.Secret{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(oac), &secret)).To(Succeed())
+				Expect(len(secret.Data)).To(Equal(2))
+				format, ok := secret.Data["format"]
+				Expect(ok).To(BeTrue())
+				Expect(string(format)).To(Equal("ignition"))
+				ignition, ok := secret.Data["value"]
+				Expect(ok).To(BeTrue())
+				Expect(string(ignition)).ToNot(BeEmpty())
+				Expect(string(ignition)).To(ContainSubstring("ensure-agent.service"))
 
-				})
-			},
-		)
-		When("a pull secret is not referenced in the OpenshiftAssistedConfig", func() {
+			})
+		},
+	)
+	When("a pull secret is not referenced in the OpenshiftAssistedConfig", func() {
 			It("should generate a fake pull secret and reference it in the infraenv", func() {
 
 				oac := setupControlPlaneOpenshiftAssistedConfig(ctx, k8sClient, nil)
@@ -388,20 +388,20 @@ var _ = Describe("OpenshiftAssistedConfig Controller", func() {
 					})
 					Expect(err).To(BeNil())
 
-					secret := corev1.Secret{}
-					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(oac), &secret)).To(Succeed())
-					Expect(len(secret.Data)).To(Equal(2))
-					format, ok := secret.Data["format"]
-					Expect(ok).To(BeTrue())
-					Expect(string(format)).To(Equal("ignition"))
-					ignition, ok := secret.Data["value"]
-					Expect(ok).To(BeTrue())
-					Expect(string(ignition)).ToNot(BeEmpty())
-					Expect(string(ignition)).To(Equal(mockResponse))
+				secret := corev1.Secret{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(oac), &secret)).To(Succeed())
+				Expect(len(secret.Data)).To(Equal(2))
+				format, ok := secret.Data["format"]
+				Expect(ok).To(BeTrue())
+				Expect(string(format)).To(Equal("ignition"))
+				ignition, ok := secret.Data["value"]
+				Expect(ok).To(BeTrue())
+				Expect(string(ignition)).ToNot(BeEmpty())
+				Expect(string(ignition)).To(ContainSubstring("ensure-agent.service"))
 
-				})
 			})
-		When("HTTPClientFactory returns an error", func() {
+		})
+	When("HTTPClientFactory returns an error", func() {
 			It("should handle HTTP client creation errors gracefully", func() {
 				// Set up mock factory that returns an error
 				mockFactory := &mockHTTPClientFactory{

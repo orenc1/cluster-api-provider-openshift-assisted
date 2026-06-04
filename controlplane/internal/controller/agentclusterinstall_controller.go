@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
@@ -150,6 +151,17 @@ func (r *AgentClusterInstallReconciler) createKubeconfig(
 	if !ok {
 		return fmt.Errorf("kubeconfig with key `%s` not found in secret %s", kubeconfigSecretKey, kubeconfigSecret.Name)
 	}
+
+	// When using Route-based access (pod networking), rewrite the kubeconfig server URL
+	// from port 6443 to port 443 so it goes through the infra router's passthrough Route.
+	// The hostname stays the same (api.<cluster>.<baseDomain>), preserving TLS validity.
+	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt &&
+		acp.Spec.Config.KubeVirt != nil &&
+		acp.Spec.Config.KubeVirt.ExternalAccess != nil &&
+		acp.Spec.Config.KubeVirt.ExternalAccess.UseRoutes {
+		kubeconfig = rewriteKubeconfigPort(kubeconfig)
+	}
+
 	// Create secret <cluster-name>-kubeconfig from original kubeconfig secret - this is what the CAPI Cluster looks for to set the control plane as initialized
 	clusterNameKubeconfigSecret := GenerateSecretWithOwner(
 		client.ObjectKey{Name: clusterName, Namespace: acp.Namespace},
@@ -165,6 +177,15 @@ func (r *AgentClusterInstallReconciler) createKubeconfig(
 		}
 	}
 	return nil
+}
+
+// rewriteKubeconfigPort replaces :6443 with :443 in the kubeconfig server URL.
+// This allows the kubeconfig to work through the infra cluster's OpenShift Router
+// (passthrough Route on port 443) while preserving the hostname for TLS validation.
+func rewriteKubeconfigPort(kubeconfig []byte) []byte {
+	content := string(kubeconfig)
+	content = strings.ReplaceAll(content, ":6443", ":443")
+	return []byte(content)
 }
 
 func (r *AgentClusterInstallReconciler) updateLabels(

@@ -27,6 +27,7 @@ import (
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/auth"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/imageregistry"
+	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/kubevirt"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/release"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/pkg/containers"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
@@ -43,6 +44,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	capiutil "sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/conditions"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -91,11 +93,22 @@ func (r *ClusterDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // +kubebuilder:rbac:groups=hive.openshift.io,resources=clusterdeployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=openshiftassistedcontrolplanes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=openshiftassistedcontrolplanes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machinedeployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=hive.openshift.io,resources=clusterimagesets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agentserviceconfigs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=operator.openshift.io,resources=ingresscontrollers,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=operator.openshift.io,resources=dnses,verbs=get;list;watch;update;patch
 
 func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
@@ -147,6 +160,113 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
+	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+		infraNS := ""
+		if acp.Spec.Config.KubeVirt != nil {
+			infraNS = acp.Spec.Config.KubeVirt.InfraClusterNamespace
+		}
+
+		// Ensure OS image is available in AgentServiceConfig for the target OCP version
+		if err := kubevirt.EnsureOSImageInAgentServiceConfig(ctx, r.Client, acp.Spec.DistributionVersion); err != nil {
+			log.Error(err, "failed to ensure OS image in AgentServiceConfig")
+			return ctrl.Result{}, err
+		}
+
+		// Ensure RHCOS kubevirt image is published to the configured registry
+		pullSecretName := ""
+		if acp.Spec.Config.PullSecretRef != nil {
+			pullSecretName = acp.Spec.Config.PullSecretRef.Name
+		}
+		if err := kubevirt.EnsureRHCOSImage(ctx, r.Client, acp, releaseImageWithDigest, pullSecretName); err != nil {
+			log.Error(err, "failed to ensure RHCOS kubevirt image")
+			return ctrl.Result{}, err
+		}
+
+		// Create Services for external access (ClusterIP when using Routes, LB otherwise)
+		serviceIPs, err := kubevirt.EnsureExternalAccessServices(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace)
+		if err != nil {
+			log.Error(err, "failed to create external access services")
+			return ctrl.Result{}, err
+		}
+
+		// When using Routes, create passthrough Routes and patch IngressController
+		if acp.Spec.Config.KubeVirt != nil && acp.Spec.Config.KubeVirt.ExternalAccess != nil && acp.Spec.Config.KubeVirt.ExternalAccess.UseRoutes {
+			if err := kubevirt.EnsureIngressControllerWildcardPolicy(ctx, r.Client); err != nil {
+				log.Error(err, "failed to ensure IngressController wildcard policy")
+				return ctrl.Result{}, err
+			}
+			if err := kubevirt.EnsureExternalRoutes(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
+				log.Error(err, "failed to ensure external routes")
+				return ctrl.Result{}, err
+			}
+		}
+
+		// Determine DNS target IPs for api/api-int resolution.
+		// Two phases:
+		//
+		// Phase 1 (during installation - kubeconfig NOT available):
+		//   Point api/api-int to the BOOTSTRAP pod IP directly.
+		//   The service load-balances across all control plane VMs, but only the
+		//   bootstrap VM runs the API server and MCS during installation. Using
+		//   the service ClusterIP causes ~2/3 of connections to fail (routed to
+		//   non-ready VMs), stalling installation.
+		//
+		// Phase 2 (after installation - kubeconfig IS available):
+		//   Switch to the service ClusterIP for proper load balancing across all
+		//   nodes now that they all run kube-apiserver.
+		kubeconfigAvailable := conditions.IsTrue(acp, string(controlplanev1alpha3.KubeconfigAvailableCondition))
+		dnsIPs := serviceIPs
+		if !kubeconfigAvailable {
+			bootstrapIP, bErr := kubevirt.GetBootstrapPodIP(ctx, r.Client, clusterDeployment.Spec.ClusterName, acp.Namespace)
+			if bErr != nil {
+				log.V(1).Info("could not resolve bootstrap pod IP, falling back to service ClusterIP", "error", bErr)
+			} else if bootstrapIP != "" {
+				log.Info("using bootstrap pod IP for DNS resolution during installation", "bootstrapIP", bootstrapIP)
+				dnsIPs = &kubevirt.ServiceIPs{
+					APIClusterIP: bootstrapIP,
+				}
+				if serviceIPs != nil {
+					dnsIPs.IngressClusterIP = serviceIPs.IngressClusterIP
+				}
+			}
+		} else {
+			log.V(1).Info("kubeconfig available, using service ClusterIP for DNS")
+		}
+
+		// Get VM pod IPs for *.apps DNS resolution.
+		// The tenant router uses hostNetwork and binds to the VM pod IPs.
+		// Using these directly (instead of the infra ingress ClusterIP) avoids
+		// hairpin NAT issues when traffic from tenant pods traverses the infra service.
+		routerIPs, _ := kubevirt.GetRouterNodeIPs(ctx, r.Client, clusterDeployment.Spec.ClusterName, acp.Namespace)
+
+		// Deploy/update the DNS proxy on the infra cluster
+		apiIP := ""
+		if dnsIPs != nil {
+			apiIP = dnsIPs.APIClusterIP
+		}
+		dnsConfig := &kubevirt.DNSProxyConfig{
+			APIIP:      apiIP,
+			IngressIPs: routerIPs,
+		}
+		if err := kubevirt.EnsureDNSProxy(ctx, r.Client, acp, dnsConfig); err != nil {
+			log.Error(err, "failed to ensure DNS proxy")
+			return ctrl.Result{}, err
+		}
+
+		if _, err := kubevirt.EnsureKubeVirtManifests(ctx, r.Client, acp, infraNS, dnsIPs); err != nil {
+			log.Error(err, "failed to create KubeVirt platform manifests")
+			return ctrl.Result{}, err
+		}
+		if err := kubevirt.EnsureInfraCredentialsManifests(ctx, r.Client, acp); err != nil {
+			log.Error(err, "failed to create KubeVirt infra credentials manifests")
+			return ctrl.Result{}, err
+		}
+
+		// NOTE: DNS wildcard validation is no longer disabled here.
+		// The DNS proxy handles resolution for the tenant domain, so the
+		// validation passes naturally without patching the assisted-service deployment.
+	}
+
 	if err := r.ensureAgentClusterInstall(ctx, clusterDeployment, *acp); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -189,7 +309,10 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		}
 
 		aci.Spec.ClusterDeploymentRef = corev1.LocalObjectReference{Name: clusterDeployment.Name}
-		aci.Spec.PlatformType = hiveext.PlatformType(configv1.NonePlatformType)
+		aci.Spec.PlatformType = getAgentClusterInstallPlatformType(oacp)
+		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt || oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformExternal {
+			aci.Spec.ExternalPlatformSpec = getExternalPlatformSpec(oacp)
+		}
 		aci.Spec.ProvisionRequirements = hiveext.ProvisionRequirements{
 			ControlPlaneAgents: int(oacp.Spec.Replicas),
 			WorkerAgents:       workerNodes,
@@ -206,7 +329,6 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
 			aci.Spec.APIVIPs = oacp.Spec.Config.APIVIPs
 			aci.Spec.IngressVIPs = oacp.Spec.Config.IngressVIPs
-			aci.Spec.PlatformType = hiveext.PlatformType(configv1.BareMetalPlatformType)
 		}
 		installConfigOverride, err := getInstallConfigOverride(&oacp, aci)
 		if err != nil {
@@ -308,7 +430,28 @@ func getClusterNetworks(cluster *clusterv1.Cluster) ([]hiveext.ClusterNetworkEnt
 		clusterNetwork = append(clusterNetwork, hiveext.ClusterNetworkEntry{CIDR: cidrBlock, HostPrefix: 23})
 	}
 
-	return clusterNetwork, cluster.Spec.ClusterNetwork.Services.CIDRBlocks
+	serviceNetwork := cluster.Spec.ClusterNetwork.Services.CIDRBlocks
+
+	// If no networks are specified, use defaults for KubeVirt tenant clusters.
+	// Pod CIDR must not overlap with the infra cluster's pod network (10.128.0.0/14)
+	// because VMs get real IPs from the infra pod network.
+	// Service CIDR MUST differ from the infra cluster's service CIDR (172.30.0.0/16).
+	// Once the tenant's OVN-Kubernetes starts, it claims the tenant service CIDR and
+	// routes all matching traffic internally. If the tenant uses the same CIDR as
+	// the infra cluster, masters lose connectivity to infra services (CoreDNS at
+	// 172.30.0.10, API Service) causing the installation to stall permanently.
+	// Using 172.31.0.0/16 avoids this conflict while keeping resolv.conf pointing
+	// at the infra CoreDNS (172.30.0.10) working throughout the installation.
+	if len(clusterNetwork) == 0 {
+		clusterNetwork = []hiveext.ClusterNetworkEntry{
+			{CIDR: "10.132.0.0/14", HostPrefix: 23},
+		}
+	}
+	if len(serviceNetwork) == 0 {
+		serviceNetwork = []string{"172.31.0.0/16"}
+	}
+
+	return clusterNetwork, serviceNetwork
 }
 
 func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssistedControlPlane) []hiveext.ManifestsConfigMapReference {
@@ -319,6 +462,24 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 
 	if acp.Spec.Config.ImageRegistryRef != nil {
 		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: imageregistry.ImageConfigMapName})
+	}
+
+	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt && acp.Spec.Config.KubeVirt != nil {
+		if acp.Spec.Config.KubeVirt.CloudControllerManager != nil && acp.Spec.Config.KubeVirt.CloudControllerManager.Enabled {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.CCMManifestsConfigMapName})
+		}
+		if acp.Spec.Config.KubeVirt.CSIDriver != nil && acp.Spec.Config.KubeVirt.CSIDriver.Type == controlplanev1alpha3.CSIDriverKubeVirt {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.CSIManifestsConfigMapName})
+		}
+		if acp.Spec.Config.KubeVirt.InfraClusterCredentials != nil {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.InfraCredentialsCMName})
+		}
+		// Tenant DNS forwarder manifest - configures the tenant cluster's DNS operator
+		// to forward queries for the base domain to the infra cluster's dns-proxy.
+		// This prevents DNS loops when service CIDRs overlap between infra and tenant.
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.TenantDNSFwdConfigName})
+		// Network MTU manifest - sets reduced MTU for double-encapsulated KubeVirt environment
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.NetworkMTUConfigMapName})
 	}
 
 	return additionalManifests
@@ -351,6 +512,40 @@ func (r *ClusterDeploymentReconciler) createImageRegistry(ctx context.Context, r
 
 type InstallConfigOverride struct {
 	Capability configv1.ClusterVersionCapabilitiesSpec `json:"capabilities,omitempty"`
+}
+
+// getAgentClusterInstallPlatformType determines the PlatformType for the AgentClusterInstall
+// based on the OACP platform configuration and VIP settings.
+func getAgentClusterInstallPlatformType(oacp controlplanev1alpha3.OpenshiftAssistedControlPlane) hiveext.PlatformType {
+	switch oacp.Spec.Config.Platform {
+	case controlplanev1alpha3.PlatformExternal, controlplanev1alpha3.PlatformKubeVirt:
+		// External/KubeVirt platforms use the External platform type.
+		// VIPs are still supported (via keepalived for bridge-network clusters).
+		return hiveext.ExternalPlatformType
+	default:
+		// BareMetal (default): use BareMetal if VIPs are configured, None otherwise.
+		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
+			return hiveext.PlatformType(configv1.BareMetalPlatformType)
+		}
+		return hiveext.PlatformType(configv1.NonePlatformType)
+	}
+}
+
+// getExternalPlatformSpec returns the ExternalPlatformSpec for the ACI based on the OACP platform.
+func getExternalPlatformSpec(oacp controlplanev1alpha3.OpenshiftAssistedControlPlane) *hiveext.ExternalPlatformSpec {
+	spec := &hiveext.ExternalPlatformSpec{}
+	switch oacp.Spec.Config.Platform {
+	case controlplanev1alpha3.PlatformKubeVirt:
+		spec.PlatformName = "KubeVirt"
+		if oacp.Spec.Config.KubeVirt != nil &&
+			oacp.Spec.Config.KubeVirt.CloudControllerManager != nil &&
+			oacp.Spec.Config.KubeVirt.CloudControllerManager.Enabled {
+			spec.CloudControllerManager = hiveext.CloudControllerManagerTypeExternal
+		}
+	case controlplanev1alpha3.PlatformExternal:
+		spec.PlatformName = "Unknown"
+	}
+	return spec
 }
 
 // isBaremetalPlatform checks if the AgentClusterInstall is configured for a baremetal platform.

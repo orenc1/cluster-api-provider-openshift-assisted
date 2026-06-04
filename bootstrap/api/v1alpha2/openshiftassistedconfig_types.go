@@ -172,6 +172,11 @@ type OpenshiftAssistedConfigStatus struct {
 	// v1beta1Conditions holds the v1beta1 style conditions for backward compatibility with CAPI conditions utilities.
 	// +optional
 	V1Beta1Conditions clusterv1.Conditions `json:"v1beta1Conditions,omitempty"`
+
+	// Ready indicates the BootstrapData field is ready to be consumed.
+	// This field is required by CAPI v1.7+ which checks status.ready on bootstrap providers.
+	// +optional
+	Ready bool `json:"ready,omitempty"`
 }
 
 //+kubebuilder:object:root=true

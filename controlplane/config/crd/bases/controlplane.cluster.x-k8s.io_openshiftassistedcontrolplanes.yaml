@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io
 spec:
   group: controlplane.cluster.x-k8s.io
@@ -848,6 +848,130 @@ spec:
                       type: string
                     maxItems: 2
                     type: array
+                  kubevirt:
+                    description: |-
+                      KubeVirt contains platform-specific configuration for the KubeVirt infrastructure provider.
+                      Only used when Platform is set to KubeVirt.
+                    properties:
+                      cloudControllerManager:
+                        description: CloudControllerManager configures the KubeVirt
+                          cloud controller manager.
+                        properties:
+                          enabled:
+                            description: |-
+                              Enabled controls whether the kubevirt-cloud-controller-manager-operator
+                              is deployed on the tenant cluster. Defaults to false.
+                              Set to true for pod-network clusters that need LoadBalancer services.
+                            type: boolean
+                        type: object
+                      csiDriver:
+                        description: CSIDriver configures the storage driver for the
+                          tenant cluster.
+                        properties:
+                          infraStorageClass:
+                            description: |-
+                              InfraStorageClass is the StorageClass on the infra cluster used to back
+                              tenant PersistentVolumeClaims. Required when Type is KubeVirt.
+                            type: string
+                          type:
+                            default: KubeVirt
+                            description: Type specifies the CSI driver deployment
+                              option.
+                            enum:
+                            - KubeVirt
+                            - None
+                            - External
+                            type: string
+                        type: object
+                      externalAccess:
+                        description: |-
+                          ExternalAccess configures external access to the tenant cluster API and Ingress
+                          via LoadBalancer Services on the infra cluster.
+                        properties:
+                          apiPort:
+                            default: 6443
+                            description: |-
+                              APIPort is the external port for the tenant API server LoadBalancer.
+                              Defaults to 6443. Set to 7443 when running on Azure (to avoid conflict
+                              with the infra cluster's API on port 6443).
+                              Only used when UseRoutes is false.
+                            format: int32
+                            type: integer
+                          ingressEnabled:
+                            description: |-
+                              IngressEnabled controls whether a LoadBalancer Service is created for
+                              tenant cluster ingress (ports 80 and 443).
+                              Only used when UseRoutes is false.
+                            type: boolean
+                          useRoutes:
+                            description: |-
+                              UseRoutes enables Route-based external access instead of LoadBalancer services.
+                              When true, passthrough OpenShift Routes are created on the infra cluster for
+                              both API and ingress traffic, and services are created as ClusterIP type.
+                              This requires the baseDomain to be a subdomain of the infra cluster's apps domain
+                              (so that the existing wildcard DNS resolves tenant domains to the infra router).
+                              Only applicable for pod-networking topologies where VMs are reachable via ClusterIP.
+                              For host-network/Multus/NAD setups, leave this false and use LoadBalancer mode.
+                            type: boolean
+                        type: object
+                      infraClusterCredentials:
+                        description: |-
+                          InfraClusterCredentials references a Secret containing the kubeconfig for the
+                          infra cluster where VMs run. This credential is injected into the tenant cluster
+                          for use by KCCM and kubevirt-csi-driver operators.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      infraClusterNamespace:
+                        description: InfraClusterNamespace is the namespace on the
+                          infra cluster where tenant VMs reside.
+                        type: string
+                      networking:
+                        description: Networking contains KubeVirt VM networking configuration.
+                        properties:
+                          mode:
+                            default: Bridge
+                            description: |-
+                              Mode specifies the VM networking mode. Defaults to Bridge.
+                              Bridge mode is required for multi-node clusters (unique IPs needed for etcd).
+                            enum:
+                            - Bridge
+                            - Masquerade
+                            type: string
+                        type: object
+                      rhcosImagePushSecret:
+                        description: |-
+                          RHCOSImagePushSecret references a Secret with registry push credentials
+                          (dockerconfigjson format) used by the RHCOS image publishing Job.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      rhcosImageRegistry:
+                        description: |-
+                          RHCOSImageRegistry is the target container registry where the RHCOS kubevirt
+                          ociarchive will be pushed as a container image for CDI to import.
+                          Example: "quay.io/orenc/rhcos-kubevirt"
+                          The tag is derived from the OCP version (e.g., "4.20").
+                        type: string
+                    type: object
                   manifestsConfigMapRefs:
                     description: |-
                       ManifestsConfigMapRefs is an array of references to user-provided manifests ConfigMaps to
@@ -868,6 +992,17 @@ spec:
                   mastersSchedulable:
                     description: Set to true to allow control plane nodes to be schedulable
                     type: boolean
+                  platform:
+                    default: BareMetal
+                    description: |-
+                      Platform specifies the infrastructure platform type for the cluster.
+                      Valid values are: BareMetal (default), External, KubeVirt.
+                      When set to External or KubeVirt, Metal3-specific behaviors are disabled.
+                    enum:
+                    - BareMetal
+                    - External
+                    - KubeVirt
+                    type: string
                   proxy:
                     description: Proxy defines the proxy settings used for the install
                       config

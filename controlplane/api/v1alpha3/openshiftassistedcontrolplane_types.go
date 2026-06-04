@@ -57,6 +57,19 @@ type OpenshiftAssistedControlPlaneSpec struct {
 type OpenshiftAssistedControlPlaneConfigSpec struct {
 	// From AgentClusterInstall https://github.com/openshift/assisted-service/blob/master/api/hiveextension/v1beta1/agentclusterinstall_types.go
 
+	// Platform specifies the infrastructure platform type for the cluster.
+	// Valid values are: BareMetal (default), External, KubeVirt.
+	// When set to External or KubeVirt, Metal3-specific behaviors are disabled.
+	// +kubebuilder:validation:Enum=BareMetal;External;KubeVirt
+	// +kubebuilder:default=BareMetal
+	// +optional
+	Platform PlatformType `json:"platform,omitempty"`
+
+	// KubeVirt contains platform-specific configuration for the KubeVirt infrastructure provider.
+	// Only used when Platform is set to KubeVirt.
+	// +optional
+	KubeVirt *KubeVirtPlatformSpec `json:"kubevirt,omitempty"`
+
 	// APIVIPs are the virtual IPs used to reach the OpenShift cluster's API.
 	// Enter one IP address for single-stack clusters, or up to two for dual-stack clusters (at
 	// most one IP address per IP stack used). The order of stacks should be the same as order
@@ -232,6 +245,151 @@ type OpenshiftAssistedControlPlaneList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenshiftAssistedControlPlane `json:"items"`
+}
+
+// PlatformType defines the infrastructure platform type for the cluster.
+// +kubebuilder:validation:Enum=BareMetal;External;KubeVirt
+type PlatformType string
+
+const (
+	// PlatformBareMetal indicates a bare-metal platform (Metal3/CAPM3).
+	PlatformBareMetal PlatformType = "BareMetal"
+
+	// PlatformExternal indicates an external platform (generic, no specific cloud integration).
+	PlatformExternal PlatformType = "External"
+
+	// PlatformKubeVirt indicates a KubeVirt platform (VMs on an existing cluster).
+	PlatformKubeVirt PlatformType = "KubeVirt"
+)
+
+// KubeVirtPlatformSpec contains KubeVirt-specific platform configuration.
+type KubeVirtPlatformSpec struct {
+	// CloudControllerManager configures the KubeVirt cloud controller manager.
+	// +optional
+	CloudControllerManager *KubeVirtCCMSpec `json:"cloudControllerManager,omitempty"`
+
+	// CSIDriver configures the storage driver for the tenant cluster.
+	// +optional
+	CSIDriver *KubeVirtCSISpec `json:"csiDriver,omitempty"`
+
+	// InfraClusterCredentials references a Secret containing the kubeconfig for the
+	// infra cluster where VMs run. This credential is injected into the tenant cluster
+	// for use by KCCM and kubevirt-csi-driver operators.
+	// +optional
+	InfraClusterCredentials *corev1.LocalObjectReference `json:"infraClusterCredentials,omitempty"`
+
+	// InfraClusterNamespace is the namespace on the infra cluster where tenant VMs reside.
+	// +optional
+	InfraClusterNamespace string `json:"infraClusterNamespace,omitempty"`
+
+	// Networking contains KubeVirt VM networking configuration.
+	// +optional
+	Networking *KubeVirtNetworkingSpec `json:"networking,omitempty"`
+
+	// ExternalAccess configures external access to the tenant cluster API and Ingress
+	// via LoadBalancer Services on the infra cluster.
+	// +optional
+	ExternalAccess *KubeVirtExternalAccessSpec `json:"externalAccess,omitempty"`
+
+	// RHCOSImageRegistry is the target container registry where the RHCOS kubevirt
+	// ociarchive will be pushed as a container image for CDI to import.
+	// Example: "quay.io/orenc/rhcos-kubevirt"
+	// The tag is derived from the OCP version (e.g., "4.20").
+	// +optional
+	RHCOSImageRegistry string `json:"rhcosImageRegistry,omitempty"`
+
+	// RHCOSImagePushSecret references a Secret with registry push credentials
+	// (dockerconfigjson format) used by the RHCOS image publishing Job.
+	// +optional
+	RHCOSImagePushSecret *corev1.LocalObjectReference `json:"rhcosImagePushSecret,omitempty"`
+}
+
+// KubeVirtNetworkingMode specifies how VMs are attached to the network.
+// +kubebuilder:validation:Enum=Bridge;Masquerade
+type KubeVirtNetworkingMode string
+
+const (
+	// NetworkingModeBridge attaches VMs directly to the pod network via a bridge.
+	// Each VM gets a unique, routable pod IP. Required for multi-node etcd quorum.
+	NetworkingModeBridge KubeVirtNetworkingMode = "Bridge"
+
+	// NetworkingModeMasquerade uses NAT for VM traffic (all VMs see the same internal IP).
+	// Not suitable for multi-node control planes.
+	NetworkingModeMasquerade KubeVirtNetworkingMode = "Masquerade"
+)
+
+// KubeVirtNetworkingSpec contains networking configuration for KubeVirt VMs.
+type KubeVirtNetworkingSpec struct {
+	// Mode specifies the VM networking mode. Defaults to Bridge.
+	// Bridge mode is required for multi-node clusters (unique IPs needed for etcd).
+	// +kubebuilder:default=Bridge
+	// +optional
+	Mode KubeVirtNetworkingMode `json:"mode,omitempty"`
+}
+
+// KubeVirtExternalAccessSpec configures external access to the tenant cluster.
+type KubeVirtExternalAccessSpec struct {
+	// APIPort is the external port for the tenant API server LoadBalancer.
+	// Defaults to 6443. Set to 7443 when running on Azure (to avoid conflict
+	// with the infra cluster's API on port 6443).
+	// Only used when UseRoutes is false.
+	// +kubebuilder:default=6443
+	// +optional
+	APIPort int32 `json:"apiPort,omitempty"`
+
+	// IngressEnabled controls whether a LoadBalancer Service is created for
+	// tenant cluster ingress (ports 80 and 443).
+	// Only used when UseRoutes is false.
+	// +optional
+	IngressEnabled bool `json:"ingressEnabled,omitempty"`
+
+	// UseRoutes enables Route-based external access instead of LoadBalancer services.
+	// When true, passthrough OpenShift Routes are created on the infra cluster for
+	// both API and ingress traffic, and services are created as ClusterIP type.
+	// This requires the baseDomain to be a subdomain of the infra cluster's apps domain
+	// (so that the existing wildcard DNS resolves tenant domains to the infra router).
+	// Only applicable for pod-networking topologies where VMs are reachable via ClusterIP.
+	// For host-network/Multus/NAD setups, leave this false and use LoadBalancer mode.
+	// +optional
+	UseRoutes bool `json:"useRoutes,omitempty"`
+}
+
+// KubeVirtCCMSpec configures the KubeVirt cloud controller manager operator.
+type KubeVirtCCMSpec struct {
+	// Enabled controls whether the kubevirt-cloud-controller-manager-operator
+	// is deployed on the tenant cluster. Defaults to false.
+	// Set to true for pod-network clusters that need LoadBalancer services.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// KubeVirtCSIDriverType defines the CSI driver deployment option.
+// +kubebuilder:validation:Enum=KubeVirt;None;External
+type KubeVirtCSIDriverType string
+
+const (
+	// CSIDriverKubeVirt deploys the kubevirt-csi-driver-operator on the tenant cluster.
+	CSIDriverKubeVirt KubeVirtCSIDriverType = "KubeVirt"
+
+	// CSIDriverNone disables CSI driver deployment; user manages storage independently.
+	CSIDriverNone KubeVirtCSIDriverType = "None"
+
+	// CSIDriverExternal indicates user-provided CSI manifests will be injected.
+	CSIDriverExternal KubeVirtCSIDriverType = "External"
+)
+
+// KubeVirtCSISpec configures the CSI driver for the tenant cluster.
+type KubeVirtCSISpec struct {
+	// Type specifies the CSI driver deployment option.
+	// +kubebuilder:validation:Enum=KubeVirt;None;External
+	// +kubebuilder:default=KubeVirt
+	// +optional
+	Type KubeVirtCSIDriverType `json:"type,omitempty"`
+
+	// InfraStorageClass is the StorageClass on the infra cluster used to back
+	// tenant PersistentVolumeClaims. Required when Type is KubeVirt.
+	// +optional
+	InfraStorageClass string `json:"infraStorageClass,omitempty"`
 }
 
 func init() {

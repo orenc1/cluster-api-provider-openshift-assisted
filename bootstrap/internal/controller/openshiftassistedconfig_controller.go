@@ -42,6 +42,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -260,6 +261,14 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 		return ctrl.Result{}, err
 	}
 
+	// Merge discovery-specific components (e.g., fallback agent-start service
+	// for KubeVirt environments where normal Ignition enablement may fail).
+	ignition, err = ign.MergeDiscoveryIgnitionConfig(log, ignition)
+	if err != nil {
+		log.Error(err, "failed to merge discovery ignition config")
+		return ctrl.Result{}, err
+	}
+
 	secret, err := r.createUserDataSecret(ctx, config, ignition)
 	if err != nil {
 		log.Error(err, "could not create user data secret", "name", config.Name)
@@ -276,6 +285,7 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 
 	config.Status.Initialization.DataSecretCreated = ptr.To(true)
 	config.Status.DataSecretName = secret.Name
+	config.Status.Ready = true
 	v1beta1conditions.MarkTrue(config, bootstrapv1alpha2.DataSecretAvailableCondition)
 	return ctrl.Result{}, rerr
 }
@@ -296,7 +306,15 @@ func (r *OpenshiftAssistedConfigReconciler) getIgnition(ctx context.Context, inf
 }
 
 func isInfrastructureProvisioned(cluster *clusterv1.Cluster) bool {
-	return cluster.Status.Initialization.InfrastructureProvisioned != nil && *(cluster.Status.Initialization.InfrastructureProvisioned)
+	if cluster.Status.Initialization.InfrastructureProvisioned != nil {
+		return *cluster.Status.Initialization.InfrastructureProvisioned
+	}
+	for _, c := range cluster.Status.Conditions {
+		if c.Type == clusterv1.ClusterInfrastructureReadyCondition {
+			return c.Status == metav1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // getHTTPClient returns a lazily-loaded HTTP client or the pre-set test client

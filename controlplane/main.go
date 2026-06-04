@@ -32,6 +32,7 @@ import (
 
 	bootstrapv1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/bootstrap/api/v1alpha2"
 	configv1 "github.com/openshift/api/config/v1"
+	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
@@ -79,6 +80,7 @@ func init() {
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
 	utilruntime.Must(hivev1.AddToScheme(scheme))
 	utilruntime.Must(hiveext.AddToScheme(scheme))
+	utilruntime.Must(aiv1beta1.AddToScheme(scheme))
 	utilruntime.Must(bootstrapv1alpha2.AddToScheme(scheme))
 	utilruntime.Must(configv1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme

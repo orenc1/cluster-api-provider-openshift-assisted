@@ -85,7 +85,12 @@ WantedBy=multi-user.target
 // node (post-discovery) phase. These are conditionally included based on the
 // IgnitionOptions:
 //
-// Installed node units:
+// Installed node units (always included):
+//
+//   - capoa-remove-firstboot-karg.service — removes ignition.firstboot from BLS entries to prevent
+//     Ignition re-fetch after MCO-triggered reboots
+//
+// Installed node units (conditionally included):
 //
 //   - configdrive-metadata.service   — reads metadata from config-2 drive (when hostname or kubelet custom labels need it)
 //   - kubelet-customlabels.service   — applies kubelet custom labels and provider ID (when KubeletCustomLabelsFile is set)
@@ -102,6 +107,12 @@ WantedBy=multi-user.target
 func installedNodeComponents(opts IgnitionOptions) ([]config_types.Unit, []config_types.File) {
 	var units []config_types.Unit
 	var files []config_types.File
+
+	// Always include: remove ignition.firstboot karg to prevent Ignition re-fetch
+	// after MCO-triggered reboots (see getRemoveFirstbootKargUnit for details).
+	firstbootUnit, firstbootFile := getRemoveFirstbootKargUnit()
+	units = append(units, firstbootUnit)
+	files = append(files, firstbootFile)
 
 	// Infrastructure: configdrive metadata is needed when hostname or kubelet
 	// custom labels require resolving environment variables from the config drive.
@@ -440,6 +451,126 @@ func MergeIgnitionConfig(log logr.Logger, baseIgnition []byte, opts IgnitionOpti
 	config.Storage.Files = append(config.Storage.Files, files...)
 
 	return json.Marshal(config)
+}
+
+// MergeDiscoveryIgnitionConfig merges a fallback agent-start service into the
+// discovery-phase Ignition config. This ensures the assisted-installer agent
+// service starts reliably on KubeVirt VMs, where the normal Ignition first-boot
+// enablement can fail due to timing issues with cloud-init config drive delivery.
+func MergeDiscoveryIgnitionConfig(log logr.Logger, baseIgnition []byte) ([]byte, error) {
+	var versionInfo ignitionVersionInfo
+	if err := json.Unmarshal(baseIgnition, &versionInfo); err == nil {
+		if versionInfo.Ignition.Version != expectedIgnitionVersion {
+			log.V(logutil.WarningLevel).Info(
+				"discovery ignition config has different version than expected",
+				"expectedVersion", expectedIgnitionVersion,
+				"actualVersion", versionInfo.Ignition.Version,
+			)
+		}
+	}
+
+	var config config_types.Config
+	if err := json.Unmarshal(baseIgnition, &config); err != nil {
+		return nil, err
+	}
+
+	config.Systemd.Units = append(config.Systemd.Units, getEnsureAgentUnit())
+
+	return json.Marshal(config)
+}
+
+// getEnsureAgentUnit returns a systemd timer-triggered service that ensures
+// the assisted-installer agent service starts. This acts as a safety net for
+// environments where Ignition's normal unit enablement may partially fail
+// (e.g., KubeVirt VMs with config drive delivery).
+func getEnsureAgentUnit() config_types.Unit {
+	contents := `[Unit]
+Description=Ensure assisted-installer agent is running
+After=network-online.target multi-user.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/bash -c 'sleep 30'
+ExecStart=/bin/bash -c 'systemctl is-active agent.service >/dev/null 2>&1 && exit 0; systemctl enable agent.service 2>/dev/null || true; systemctl start agent.service'
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+`
+	enabled := true
+	return config_types.Unit{
+		Contents: &contents,
+		Enabled:  &enabled,
+		Name:     "ensure-agent.service",
+	}
+}
+
+// removeFirstbootKargScript strips 'ignition.firstboot' from all BLS (Boot Loader Spec)
+// entries in /boot/loader/entries/. When the MCO deploys a new ostree commit and reboots,
+// a lingering ignition.firstboot karg causes Ignition to re-enter the fetch phase and
+// attempt to download config from the Machine Config Server (port 22623). During bootstrap
+// the MCS is not yet available, creating a deadlock where VMs cannot boot.
+const removeFirstbootKargScript = `#!/bin/bash
+set -euo pipefail
+
+modified=0
+for entry in /boot/loader/entries/*.conf; do
+    [ -f "$entry" ] || continue
+    if grep -q 'ignition.firstboot' "$entry"; then
+        sed -i 's/ ignition.firstboot//g; s/ignition.firstboot //g; s/ignition.firstboot$//g' "$entry"
+        modified=$((modified + 1))
+    fi
+done
+
+if [ $modified -gt 0 ]; then
+    echo "capoa-remove-firstboot-karg: removed ignition.firstboot from $modified BLS entries"
+fi
+`
+
+// getRemoveFirstbootKargUnit returns a oneshot systemd unit that removes the
+// ignition.firstboot kernel argument from all BLS entries on first boot.
+//
+// Background: In the assisted-service installation flow, the RHCOS image is written
+// with ignition.firstboot in the kernel command line. This karg tells Ignition to run
+// its fetch phase on boot. Normally, ignition-firstboot-complete.service removes this
+// karg after a successful first boot. However, in some environments (particularly when
+// the assisted-service provides Ignition config offline), this removal doesn't occur.
+//
+// When the Machine Config Operator later deploys a new ostree commit (due to RHCOS
+// version mismatch between the ISO and release payload), it copies kernel arguments
+// from the current BLS entry — including the lingering ignition.firstboot. On reboot,
+// Ignition sees this karg and tries to fetch config from the Machine Config Server
+// (api-int:22623), which isn't running yet during bootstrap, causing a deadlock.
+//
+// This unit runs early (before kubelet) and is conditioned on ignition.firstboot being
+// present in the kernel command line, so it's a no-op on subsequent boots.
+func getRemoveFirstbootKargUnit() (config_types.Unit, config_types.File) {
+	unitContents := `[Unit]
+Description=Remove ignition.firstboot from BLS entries
+Before=kubelet.service
+After=ignition-files.service
+ConditionKernelCommandLine=ignition.firstboot
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/bin/capoa-remove-firstboot-karg
+
+[Install]
+WantedBy=multi-user.target
+`
+	enabled := true
+	unit := config_types.Unit{
+		Contents: &unitContents,
+		Enabled:  &enabled,
+		Name:     "capoa-remove-firstboot-karg.service",
+	}
+
+	file := CreateIgnitionFile("/usr/local/bin/capoa-remove-firstboot-karg",
+		"root", "data:text/plain;charset=utf-8;base64,"+base64Encode(removeFirstbootKargScript), 0700, true)
+
+	return unit, file
 }
 
 func CreateIgnitionFile(path, user, content string, mode int, overwrite bool) config_types.File {
