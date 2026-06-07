@@ -950,7 +950,6 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfi
 	}
 
 	// Merge in annotations from the OpenshiftAssistedControlPlane itself
-	// This allows propagation of discovery-ignition-override and other annotations
 	// Skip the conversion data annotation to avoid corrupting the bootstrap config's TypeMeta during conversion
 	for k, v := range oacp.Annotations {
 		if k == utilconversion.DataAnnotation {
@@ -958,6 +957,25 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfi
 		}
 		if _, exists := annotations[k]; !exists {
 			annotations[k] = v
+		}
+	}
+
+	// For KubeVirt platform, auto-generate ignition overrides if not explicitly set by user.
+	// This handles DNS resolution, NetworkManager config, IPv4 preference, and placeholder
+	// manifests — all platform implementation details that users shouldn't need to specify.
+	if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+		sshKey := oacp.Spec.Config.SSHAuthorizedKey
+
+		if _, exists := annotations[bootstrapv1alpha2.DiscoveryIgnitionOverrideAnnotation]; !exists {
+			if override, err := kubevirt.KubeVirtDiscoveryIgnitionOverride(sshKey); err == nil && override != "" {
+				annotations[bootstrapv1alpha2.DiscoveryIgnitionOverrideAnnotation] = override
+			}
+		}
+
+		if _, exists := annotations[bootstrapv1alpha2.IgnitionOverrideAnnotation]; !exists {
+			if override, err := kubevirt.KubeVirtInstallIgnitionOverride(sshKey); err == nil && override != "" {
+				annotations[bootstrapv1alpha2.IgnitionOverrideAnnotation] = override
+			}
 		}
 	}
 

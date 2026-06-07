@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/auth"
@@ -172,14 +173,37 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, err
 		}
 
-		// Ensure RHCOS kubevirt image is published to the configured registry
-		pullSecretName := ""
-		if acp.Spec.Config.PullSecretRef != nil {
-			pullSecretName = acp.Spec.Config.PullSecretRef.Name
+		// Ensure RHCOS kubevirt disk image is available (either via golden PVC or registry push)
+		rhcosSource := controlplanev1alpha3.RHCOSImageSourceGoldenPVC
+		if acp.Spec.Config.KubeVirt != nil && acp.Spec.Config.KubeVirt.RHCOSImageSource != "" {
+			rhcosSource = acp.Spec.Config.KubeVirt.RHCOSImageSource
+		} else if acp.Spec.Config.KubeVirt != nil && acp.Spec.Config.KubeVirt.RHCOSImageRegistry != "" {
+			rhcosSource = controlplanev1alpha3.RHCOSImageSourceRegistry
 		}
-		if err := kubevirt.EnsureRHCOSImage(ctx, r.Client, acp, releaseImageWithDigest, pullSecretName); err != nil {
-			log.Error(err, "failed to ensure RHCOS kubevirt image")
-			return ctrl.Result{}, err
+
+		if rhcosSource == controlplanev1alpha3.RHCOSImageSourceGoldenPVC {
+			goldenPullSecretName := ""
+			if acp.Spec.Config.PullSecretRef != nil {
+				goldenPullSecretName = acp.Spec.Config.PullSecretRef.Name
+			}
+			ready, err := kubevirt.EnsureRHCOSGoldenPVC(ctx, r.Client, acp, releaseImageWithDigest, goldenPullSecretName)
+			if err != nil {
+				log.Error(err, "failed to ensure RHCOS golden PVC")
+				return ctrl.Result{}, err
+			}
+			if !ready {
+				log.V(1).Info("waiting for RHCOS golden PVC to be ready")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+		} else {
+			pullSecretName := ""
+			if acp.Spec.Config.PullSecretRef != nil {
+				pullSecretName = acp.Spec.Config.PullSecretRef.Name
+			}
+			if err := kubevirt.EnsureRHCOSImage(ctx, r.Client, acp, releaseImageWithDigest, pullSecretName); err != nil {
+				log.Error(err, "failed to ensure RHCOS kubevirt image")
+				return ctrl.Result{}, err
+			}
 		}
 
 		// Create Services for external access (ClusterIP when using Routes, LB otherwise)

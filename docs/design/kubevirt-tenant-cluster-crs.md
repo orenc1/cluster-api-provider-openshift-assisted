@@ -96,7 +96,13 @@ spec:
 
 ## KubevirtMachineTemplate
 
-Defines the VM template for control plane nodes:
+Defines the VM template for control plane nodes.
+
+### Option A: Golden PVC source (recommended, no external registry needed)
+
+When `rhcosImageSource: GoldenPVC` (default), CAPOA creates a golden DataVolume that
+imports the RHCOS qcow2 from the Red Hat mirror. Each VM clones from this PVC locally.
+The golden PVC name is deterministic: `rhcos-golden-{major.minor}` (e.g., `rhcos-golden-4.20`).
 
 ```yaml
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
@@ -147,6 +153,28 @@ spec:
                 accessModes:
                 - ReadWriteOnce
               source:
+                pvc:
+                  namespace: kubevirt-tenant
+                  name: rhcos-golden-4.20
+```
+
+### Option B: External registry source (legacy)
+
+When `rhcosImageSource: Registry`, CAPOA publishes the RHCOS image to an external
+registry and VMs import from it via CDI's registry source:
+
+```yaml
+          dataVolumeTemplates:
+          - metadata:
+              name: rootdisk
+            spec:
+              storage:
+                resources:
+                  requests:
+                    storage: 120Gi
+                accessModes:
+                - ReadWriteOnce
+              source:
                 registry:
                   url: docker://quay.io/orenc/rhcos-kubevirt:4.20
 ```
@@ -157,7 +185,10 @@ The control plane provider resource. This is the primary CR that drives the inst
 - Cluster configuration (name, domain, platform, networking)
 - Reference to the pull secret and SSH key
 - KubeVirt-specific settings (external access via Routes)
-- Ignition overrides for DNS and bootstrap fixes
+
+When `platform: KubeVirt` is set, the controller **automatically generates** all required
+ignition overrides (DNS resolution, NetworkManager config, IPv4 preference, placeholder
+manifests, SSH key injection). Users do not need to specify any annotations.
 
 ```yaml
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
@@ -165,11 +196,6 @@ kind: OpenshiftAssistedControlPlane
 metadata:
   name: kubevirt-tenant
   namespace: kubevirt-tenant
-  annotations:
-    openshiftassistedconfig.cluster.x-k8s.io/discovery-ignition-override: |
-      {"ignition":{"version":"3.1.0"},"passwd":{"users":[{"name":"core","sshAuthorizedKeys":["<SSH_PUBLIC_KEY>"]}]}}
-    openshiftassistedconfig.cluster.x-k8s.io/ignition-override: |
-      {"ignition":{"version":"3.1.0"},"passwd":{"users":[{"name":"core","sshAuthorizedKeys":["<SSH_PUBLIC_KEY>"]}]},"storage":{"files":[{"path":"/etc/resolv.conf","mode":420,"overwrite":true,"contents":{"source":"data:text/plain;base64,bmFtZXNlcnZlciAxNzIuMzAuMC4xMAo="}},{"path":"/etc/NetworkManager/conf.d/99-capoa-dns.conf","mode":420,"overwrite":true,"contents":{"source":"data:text/plain;base64,W21haW5dCmRucz1ub25lCg=="}},{"path":"/etc/gai.conf","mode":420,"overwrite":true,"contents":{"source":"data:text/plain;base64,cHJlY2VkZW5jZSA6OmZmZmY6MC8wIDEwMAo="}},{"path":"/opt/openshift/manifests/placeholder.yaml","mode":420,"overwrite":true,"contents":{"source":"data:text/plain;base64,YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnTWFwCm1ldGFkYXRhOgogIG5hbWU6IHBsYWNlaG9sZGVyLWZpeAogIG5hbWVzcGFjZTogZGVmYXVsdAo="}},{"path":"/opt/openshift/openshift/placeholder.yaml","mode":420,"overwrite":true,"contents":{"source":"data:text/plain;base64,YXBpVmVyc2lvbjogdjEKa2luZDogQ29uZmlnTWFwCm1ldGFkYXRhOgogIG5hbWU6IHBsYWNlaG9sZGVyLWZpeAogIG5hbWVzcGFjZTogZGVmYXVsdAo="}}]}}
 spec:
   replicas: 3
   distributionVersion: "4.20.24"
@@ -191,6 +217,9 @@ spec:
         useRoutes: true
   openshiftAssistedConfigSpec: {}
 ```
+
+> **Note:** Users can still provide explicit `discovery-ignition-override` or `ignition-override`
+> annotations on the OACP to override the auto-generated values if needed for advanced use cases.
 
 ## Cluster (CAPI)
 
@@ -241,9 +270,10 @@ oc patch kubevirtcluster kubevirt-tenant -n kubevirt-tenant \
 
 ---
 
-## Ignition Override Details
+## Ignition Overrides (auto-generated)
 
-The `ignition-override` annotation injects critical files into the installed RHCOS nodes:
+When `platform: KubeVirt`, the OACP controller automatically generates ignition overrides
+that inject the following into RHCOS nodes. No user action is required.
 
 | File | Purpose |
 |------|---------|
@@ -252,6 +282,9 @@ The `ignition-override` annotation injects critical files into the installed RHC
 | `/etc/gai.conf` | Prioritizes IPv4 over IPv6 (avoids AAAA lookup failures) |
 | `/opt/openshift/manifests/placeholder.yaml` | Valid YAML placeholder preventing `bootkube` crash on empty manifest dirs |
 | `/opt/openshift/openshift/placeholder.yaml` | Same fix for the openshift manifests directory |
+
+The SSH key from `spec.config.sshAuthorizedKey` is also automatically injected into both
+the discovery ISO and the installed nodes for `core` user access.
 
 ## Important Notes
 
@@ -288,4 +321,16 @@ When `platform: KubeVirt` is set with `externalAccess.useRoutes: true`, CAPOA au
 6. **DNS operator patch** forwarding tenant domain queries to the proxy
 7. **ClusterDeployment** and **AgentClusterInstall** for Assisted Service
 8. **InfraEnv** resources (one per machine) with pull secret and SSH key
-9. **RHCOS image** published to the configured registry
+9. **RHCOS golden PVC** (DataVolume importing qcow2 from Red Hat mirror, when `rhcosImageSource: GoldenPVC`)
+
+### RHCOS Image Delivery
+
+CAPOA supports two methods for making the RHCOS disk image available to KubeVirt VMs:
+
+| Method | `rhcosImageSource` | Requirements | How it works |
+|--------|-------------------|--------------|--------------|
+| **Golden PVC** (default) | `GoldenPVC` | CDI installed on infra cluster | CAPOA creates a DataVolume that imports the RHCOS qcow2 from `mirror.openshift.com` into a local PVC. Each VM clones from it via `source.pvc`. |
+| **External Registry** (legacy) | `Registry` | `rhcosImageRegistry` + `rhcosImagePushSecret` | CAPOA runs a Job that pushes the RHCOS ociarchive to an external registry. VMs import from it via `source.registry`. |
+
+The golden PVC name follows the pattern `rhcos-golden-{major.minor}` (e.g., `rhcos-golden-4.20`).
+Users set `source.pvc` in their `KubevirtMachineTemplate` referencing this name.

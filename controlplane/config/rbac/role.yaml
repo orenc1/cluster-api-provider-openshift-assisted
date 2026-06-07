@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - services
   verbs:
   - create
   - delete
@@ -15,6 +16,26 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - ""
@@ -44,6 +65,18 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - batch
@@ -190,8 +223,20 @@ rules:
 - apiGroups:
   - operator.openshift.io
   resources:
+  - dnses
   - ingresscontrollers
   verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  verbs:
+  - create
   - get
   - list
   - patch

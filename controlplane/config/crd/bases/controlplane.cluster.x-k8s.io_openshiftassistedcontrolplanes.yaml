@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.21.0
+    controller-gen.kubebuilder.io/version: v0.17.2
   name: openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io
 spec:
   group: controlplane.cluster.x-k8s.io
@@ -874,13 +874,18 @@ spec:
                               tenant PersistentVolumeClaims. Required when Type is KubeVirt.
                             type: string
                           type:
+                            allOf:
+                            - enum:
+                              - KubeVirt
+                              - None
+                              - External
+                            - enum:
+                              - KubeVirt
+                              - None
+                              - External
                             default: KubeVirt
                             description: Type specifies the CSI driver deployment
                               option.
-                            enum:
-                            - KubeVirt
-                            - None
-                            - External
                             type: string
                         type: object
                       externalAccess:
@@ -948,10 +953,17 @@ spec:
                             - Masquerade
                             type: string
                         type: object
+                      rhcosGoldenPVCSize:
+                        description: |-
+                          RHCOSGoldenPVCSize is the storage size for the golden DataVolume/PVC
+                          that holds the imported RHCOS image. Defaults to "30Gi".
+                          Only used when RHCOSImageSource is "GoldenPVC".
+                        type: string
                       rhcosImagePushSecret:
                         description: |-
                           RHCOSImagePushSecret references a Secret with registry push credentials
                           (dockerconfigjson format) used by the RHCOS image publishing Job.
+                          Only used when RHCOSImageSource is "Registry".
                         properties:
                           name:
                             default: ""
@@ -970,6 +982,22 @@ spec:
                           ociarchive will be pushed as a container image for CDI to import.
                           Example: "quay.io/orenc/rhcos-kubevirt"
                           The tag is derived from the OCP version (e.g., "4.20").
+                          Only used when RHCOSImageSource is "Registry".
+                        type: string
+                      rhcosImageSource:
+                        allOf:
+                        - enum:
+                          - Registry
+                          - GoldenPVC
+                        - enum:
+                          - Registry
+                          - GoldenPVC
+                        description: |-
+                          RHCOSImageSource specifies how the RHCOS kubevirt disk image is made available.
+                          - "Registry": Push the image to an external container registry (requires RHCOSImageRegistry).
+                          - "GoldenPVC": Import the image into a local DataVolume/PVC via CDI HTTP download.
+                            Each VM clones from this golden PVC, eliminating the need for an external registry.
+                          Defaults to "GoldenPVC" when RHCOSImageRegistry is empty.
                         type: string
                     type: object
                   manifestsConfigMapRefs:
@@ -993,15 +1021,20 @@ spec:
                     description: Set to true to allow control plane nodes to be schedulable
                     type: boolean
                   platform:
+                    allOf:
+                    - enum:
+                      - BareMetal
+                      - External
+                      - KubeVirt
+                    - enum:
+                      - BareMetal
+                      - External
+                      - KubeVirt
                     default: BareMetal
                     description: |-
                       Platform specifies the infrastructure platform type for the cluster.
                       Valid values are: BareMetal (default), External, KubeVirt.
                       When set to External or KubeVirt, Metal3-specific behaviors are disabled.
-                    enum:
-                    - BareMetal
-                    - External
-                    - KubeVirt
                     type: string
                   proxy:
                     description: Proxy defines the proxy settings used for the install

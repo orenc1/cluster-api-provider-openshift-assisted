@@ -291,18 +291,47 @@ type KubeVirtPlatformSpec struct {
 	// +optional
 	ExternalAccess *KubeVirtExternalAccessSpec `json:"externalAccess,omitempty"`
 
+	// RHCOSImageSource specifies how the RHCOS kubevirt disk image is made available.
+	// - "Registry": Push the image to an external container registry (requires RHCOSImageRegistry).
+	// - "GoldenPVC": Import the image into a local DataVolume/PVC via CDI HTTP download.
+	//   Each VM clones from this golden PVC, eliminating the need for an external registry.
+	// Defaults to "GoldenPVC" when RHCOSImageRegistry is empty.
+	// +optional
+	// +kubebuilder:validation:Enum=Registry;GoldenPVC
+	RHCOSImageSource RHCOSImageSourceType `json:"rhcosImageSource,omitempty"`
+
 	// RHCOSImageRegistry is the target container registry where the RHCOS kubevirt
 	// ociarchive will be pushed as a container image for CDI to import.
 	// Example: "quay.io/orenc/rhcos-kubevirt"
 	// The tag is derived from the OCP version (e.g., "4.20").
+	// Only used when RHCOSImageSource is "Registry".
 	// +optional
 	RHCOSImageRegistry string `json:"rhcosImageRegistry,omitempty"`
 
 	// RHCOSImagePushSecret references a Secret with registry push credentials
 	// (dockerconfigjson format) used by the RHCOS image publishing Job.
+	// Only used when RHCOSImageSource is "Registry".
 	// +optional
 	RHCOSImagePushSecret *corev1.LocalObjectReference `json:"rhcosImagePushSecret,omitempty"`
+
+	// RHCOSGoldenPVCSize is the storage size for the golden DataVolume/PVC
+	// that holds the imported RHCOS image. Defaults to "30Gi".
+	// Only used when RHCOSImageSource is "GoldenPVC".
+	// +optional
+	RHCOSGoldenPVCSize string `json:"rhcosGoldenPVCSize,omitempty"`
 }
+
+// RHCOSImageSourceType specifies how the RHCOS kubevirt disk image is provisioned.
+// +kubebuilder:validation:Enum=Registry;GoldenPVC
+type RHCOSImageSourceType string
+
+const (
+	// RHCOSImageSourceRegistry pushes the image to an external container registry.
+	RHCOSImageSourceRegistry RHCOSImageSourceType = "Registry"
+
+	// RHCOSImageSourceGoldenPVC imports the image into a local DataVolume/PVC via CDI.
+	RHCOSImageSourceGoldenPVC RHCOSImageSourceType = "GoldenPVC"
+)
 
 // KubeVirtNetworkingMode specifies how VMs are attached to the network.
 // +kubebuilder:validation:Enum=Bridge;Masquerade
