@@ -23,6 +23,7 @@ import (
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
@@ -115,6 +117,11 @@ func EnsureRHCOSGoldenPVC(
 	}
 
 	if !jobCompleted {
+		// Ensure the Job's ServiceAccount exists and has permissions to push to the internal registry
+		if err := ensureJobServiceAccountRBAC(ctx, c, namespace); err != nil {
+			return false, fmt.Errorf("failed to ensure Job SA RBAC: %w", err)
+		}
+
 		// Create the Job that downloads the kubevirt ociarchive and pushes to internal registry
 		job := buildGoldenPVCImportJob(jobName, namespace, releaseImage, internalImageRef, pullSecretName)
 		if err := ctrl.SetControllerReference(oacp, job, c.Scheme()); err != nil {
@@ -212,7 +219,8 @@ const internalRegistryCredsSecret = "internal-registry-creds"
 
 // ensureInternalRegistrySecret creates an Opaque secret with accessKeyId/secretKey
 // that CDI's importer uses to authenticate to the internal OpenShift image registry.
-// The secret is populated from the capoa-controlplane-manager SA's token.
+// It uses a service-account-token type secret (which OpenShift auto-populates with a
+// long-lived token) rather than relying on legacy auto-generated token secrets.
 func ensureInternalRegistrySecret(ctx context.Context, c client.Client, namespace string) error {
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, client.ObjectKey{Name: internalRegistryCredsSecret, Namespace: namespace}, secret)
@@ -223,19 +231,33 @@ func ensureInternalRegistrySecret(ctx context.Context, c client.Client, namespac
 		return err
 	}
 
-	// The SA token for auth to internal registry is injected by the Job's push step.
-	// For CDI's importer, we need a long-lived token. Create the secret with a
-	// projected token by referencing the SA. OpenShift auto-creates tokens for SAs.
-	saSecret := &corev1.Secret{}
-	saSecretName := "capoa-controlplane-manager-token"
-	err = c.Get(ctx, client.ObjectKey{Name: saSecretName, Namespace: namespace}, saSecret)
-	if err != nil {
-		// If the legacy token secret doesn't exist, create the registry creds secret
-		// with placeholder - the user must have created it manually via `oc create token`
-		return fmt.Errorf("SA token secret %s not found: %w; create it with: oc create secret generic %s --from-literal=accessKeyId=serviceaccount --from-literal=secretKey=$(oc create token capoa-controlplane-manager -n %s --duration=87600h)", saSecretName, err, internalRegistryCredsSecret, namespace)
+	// Create a service-account-token secret; the token controller will populate .data.token
+	tokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      goldenPVCJobSAName + "-token",
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"kubernetes.io/service-account.name": goldenPVCJobSAName,
+			},
+		},
+		Type: corev1.SecretTypeServiceAccountToken,
+	}
+	if err := c.Create(ctx, tokenSecret); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create SA token secret: %w", err)
 	}
 
-	token := string(saSecret.Data["token"])
+	// Re-read to get the populated token (token controller fills it asynchronously)
+	err = c.Get(ctx, client.ObjectKey{Name: tokenSecret.Name, Namespace: namespace}, tokenSecret)
+	if err != nil {
+		return fmt.Errorf("failed to read SA token secret: %w", err)
+	}
+
+	token := string(tokenSecret.Data["token"])
+	if token == "" {
+		// Token not yet populated by the token controller; will succeed on next reconcile
+		return fmt.Errorf("SA token secret %s exists but token not yet populated; will retry", tokenSecret.Name)
+	}
+
 	newSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      internalRegistryCredsSecret,
@@ -249,6 +271,57 @@ func ensureInternalRegistrySecret(ctx context.Context, c client.Client, namespac
 	}
 
 	return c.Create(ctx, newSecret)
+}
+
+const goldenPVCJobSAName = "capoa-controlplane-manager"
+
+// ensureJobServiceAccountRBAC ensures the ServiceAccount used by the golden PVC import
+// Job exists and has the required permissions: system:image-builder (to push to internal
+// registry) and anyuid SCC (skopeo needs it for container storage operations).
+func ensureJobServiceAccountRBAC(ctx context.Context, c client.Client, namespace string) error {
+	// Ensure ServiceAccount
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName, Namespace: namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error { return nil }); err != nil {
+		return fmt.Errorf("failed to ensure SA: %w", err)
+	}
+
+	// Ensure ClusterRoleBinding for system:image-builder (allows pushing to internal registry)
+	crbBuilder := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName + "-image-builder-" + namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, crbBuilder, func() error {
+		crbBuilder.RoleRef = rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "system:image-builder",
+		}
+		crbBuilder.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      goldenPVCJobSAName,
+			Namespace: namespace,
+		}}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to ensure image-builder ClusterRoleBinding: %w", err)
+	}
+
+	// Ensure ClusterRoleBinding for anyuid SCC (needed by skopeo for container storage)
+	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName + "-anyuid-" + namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, crb, func() error {
+		crb.RoleRef = rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "system:openshift:scc:anyuid",
+		}
+		crb.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      goldenPVCJobSAName,
+			Namespace: namespace,
+		}}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to ensure anyuid ClusterRoleBinding: %w", err)
+	}
+
+	return nil
 }
 
 // buildGoldenPVCImportJob creates a Job that extracts the RHCOS kubevirt ociarchive
@@ -294,16 +367,14 @@ ls -lh /shared/rhcos-kubevirt.ociarchive
 echo "=== Download complete ==="
 `
 
-	pushScript := `#!/bin/bash
-set -euo pipefail
+	pushScript := `#!/bin/sh
+set -eu
 
 echo "=== Preparing registry auth ==="
 SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-REGISTRY_AUTH=$(echo -n "serviceaccount:${SA_TOKEN}" | base64 -w0)
+REGISTRY_AUTH=$(printf "serviceaccount:%s" "${SA_TOKEN}" | base64 -w0)
 mkdir -p /tmp/auth
-cat > /tmp/auth/config.json <<AUTHEOF
-{"auths":{"image-registry.openshift-image-registry.svc:5000":{"auth":"${REGISTRY_AUTH}"}}}
-AUTHEOF
+printf '{"auths":{"image-registry.openshift-image-registry.svc:5000":{"auth":"%s"}}}' "${REGISTRY_AUTH}" > /tmp/auth/config.json
 
 echo "=== Pushing to internal registry: $TARGET_IMAGE ==="
 skopeo copy \
@@ -364,25 +435,25 @@ echo "=== Done: image pushed to internal registry ==="
 							},
 						},
 					},
-					Containers: []corev1.Container{
-						{
-							Name:    "push",
-							Image:   "quay.io/containers/skopeo:latest",
-							Command: []string{"/bin/bash", "-c", pushScript},
-							Env: []corev1.EnvVar{
-								{Name: "TARGET_IMAGE", Value: targetImage},
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{Name: "shared", MountPath: "/shared"},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("256Mi"),
-								},
+				Containers: []corev1.Container{
+					{
+						Name:    "push",
+						Image:   "quay.io/containers/skopeo:latest",
+						Command: []string{"/bin/sh", "-c", pushScript},
+						Env: []corev1.EnvVar{
+							{Name: "TARGET_IMAGE", Value: targetImage},
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "shared", MountPath: "/shared"},
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("100m"),
+								corev1.ResourceMemory: resource.MustParse("256Mi"),
 							},
 						},
 					},
+				},
 				},
 			},
 		},

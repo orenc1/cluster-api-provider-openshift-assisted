@@ -161,6 +161,17 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 		return fmt.Sprintf(`%s:5353 {
     errors
     log
+
+    template IN AAAA {
+        match ".*"
+        rcode NOERROR
+    }
+
+    template IN ANY {
+        match ".*"
+        rcode NOERROR
+    }
+
     forward . %s
     cache 30
 }
@@ -191,30 +202,45 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 %s        fallthrough
     }
 
+    template IN AAAA {
+        match ".*"
+        rcode NOERROR
+    }
+
+    template IN ANY {
+        match ".*"
+        rcode NOERROR
+    }
+
     forward . %s
     cache 30
 }
 `, fqdn, fqdn, escapedFQDN, apiAnswers, fqdn, escapedFQDN, apiIntAnswers, escapedFQDN, ingressAnswers, upstreamDNS)
 }
 
-// GenerateTenantDNSForwarderManifests generates manifests that will be injected
-// into the tenant cluster to configure DNS forwarding for the base domain back
-// to the infra cluster's DNS proxy.
+// GenerateTenantDNSForwarderManifests generates a day-0 manifest that configures
+// the tenant cluster's DNS operator to forward queries for the tenant's own FQDN
+// (clusterName.baseDomain) back to the infra cluster's DNS.
 //
-// Lessons learned:
-// 1. When the infra and tenant clusters share the same service CIDR
-//    (e.g., 172.30.0.0/16), the tenant cannot forward to the infra's ClusterIP DNS
-//    (172.30.0.10) because the tenant OVN will intercept it. Instead, we forward to
-//    the node IPs where the dns-proxy DaemonSet is running (via hostNetwork: true).
-// 2. This ConfigMap MUST always be created (even with placeholder content) because
-//    it is referenced in AgentClusterInstall.spec.manifestsConfigMapRefs. If the
-//    ConfigMap doesn't exist, AgentClusterInstall reports SpecSynced: False and
-//    the installation cannot proceed.
-func GenerateTenantDNSForwarderManifests(baseDomain string, dnsProxyNodeIPs []string) []ManifestEntry {
+// The zone MUST be the full FQDN (e.g., "kubevirt-tenant.apps.example.com"),
+// NOT just the baseDomain — otherwise the DNS operator won't match queries for
+// api.kubevirt-tenant.apps.example.com or *.apps.kubevirt-tenant.apps.example.com.
+//
+// In KubeVirt deployments, the tenant VMs are pods on the infra cluster's network
+// and can reach the infra cluster's DNS service ClusterIP (172.30.0.10). Forwarding
+// to this IP works because the infra DNS operator has a forwarding rule (configured
+// by EnsureDNSProxy) that routes tenant domain queries to the tenant-dns proxy.
+//
+// This ConfigMap MUST always be created (even before node IPs are known) because
+// it is referenced in AgentClusterInstall.spec.manifestsConfigMapRefs. If the
+// ConfigMap doesn't exist, AgentClusterInstall reports SpecSynced: False and
+// the installation cannot proceed.
+func GenerateTenantDNSForwarderManifests(fqdn string, dnsProxyNodeIPs []string) []ManifestEntry {
 	if len(dnsProxyNodeIPs) == 0 {
-		// Return a placeholder DNS forwarder manifest pointing to the standard
-		// infra cluster DNS IP. The controller will update with actual node IPs
-		// once they are known. This ensures the ConfigMap always exists.
+		// Forward to the infra cluster's DNS service. This works for KubeVirt
+		// because tenant VMs can reach infra ClusterIPs directly (they are pods
+		// on the infra network). The infra DNS has a forwarding rule that routes
+		// these queries to the tenant-dns proxy.
 		return []ManifestEntry{
 			{
 				Filename: "99-tenant-dns-forwarder.yaml",
@@ -231,7 +257,7 @@ spec:
         upstreams:
           - "172.30.0.10:53"
         policy: Random
-`, baseDomain),
+`, fqdn),
 			},
 		}
 	}
@@ -256,7 +282,7 @@ spec:
       forwardPlugin:
         upstreams:
 %s        policy: Random
-`, baseDomain, upstreams),
+`, fqdn, upstreams),
 		},
 	}
 }

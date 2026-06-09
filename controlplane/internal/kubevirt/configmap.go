@@ -115,12 +115,12 @@ func EnsureKubeVirtManifests(
 	}
 
 	// Tenant DNS forwarder manifests (injected into tenant cluster).
-	// These configure the tenant's DNS operator to forward base domain queries
-	// back to the infra cluster's DNS proxy nodes, avoiding circular resolution
-	// when the infra and tenant clusters share the same service CIDR.
+	// These configure the tenant's DNS operator to forward queries for the tenant's
+	// own FQDN back to the infra cluster's DNS, which has a forwarding rule to the
+	// tenant-dns proxy. The zone must be the full FQDN, not just baseDomain.
 	tenantDNSManifests := GenerateTenantDNSForwarderManifests(
-		oacp.Spec.Config.BaseDomain,
-		nil, // Node IPs are populated dynamically by the controller at runtime
+		fmt.Sprintf("%s.%s", clusterName, oacp.Spec.Config.BaseDomain),
+		nil, // In KubeVirt mode, VMs reach infra DNS directly via ClusterIP
 	)
 	if len(tenantDNSManifests) > 0 {
 		if err := ensureManifestsConfigMap(ctx, c, oacp, TenantDNSFwdConfigName, tenantDNSManifests); err != nil {

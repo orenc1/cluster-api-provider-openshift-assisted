@@ -235,6 +235,7 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
+  - rolebindings
   verbs:
   - create
   - get
@@ -246,6 +247,7 @@ rules:
   - route.openshift.io
   resources:
   - routes
+  - routes/custom-host
   verbs:
   - create
   - delete

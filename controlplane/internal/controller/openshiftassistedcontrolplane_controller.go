@@ -256,9 +256,11 @@ func isInfrastructureProvisioned(cluster *clusterv1.Cluster) bool {
 }
 
 // patchInfrastructureProvisionedIfReady checks if the infrastructure cluster resource
-// (e.g., KubevirtCluster) is ready and patches the CAPI Cluster's initialization status.
-// This works around CAPK (v1beta1) not properly setting the v1beta2 field.
+// (e.g., KubevirtCluster) is ready and patches both the infra cluster's
+// status.initialization.provisioned and the CAPI Cluster's initialization status.
+// This works around CAPK (v1beta1) not properly setting the v1beta2 fields.
 func (r *OpenshiftAssistedControlPlaneReconciler) patchInfrastructureProvisionedIfReady(ctx context.Context, cluster *clusterv1.Cluster) (bool, error) {
+	log := ctrl.LoggerFrom(ctx)
 	infraRef := cluster.Spec.InfrastructureRef
 	if infraRef.Kind == "" || infraRef.Name == "" {
 		return false, nil
@@ -280,12 +282,67 @@ func (r *OpenshiftAssistedControlPlaneReconciler) patchInfrastructureProvisioned
 		return false, nil
 	}
 
+	// Patch the infra cluster's status.initialization.provisioned field directly.
+	// CAPI v1beta2 reads this from the infra cluster object to determine InfrastructureReady.
+	provisioned, _, _ := unstructured.NestedBool(infraObj.Object, "status", "initialization", "provisioned")
+	if !provisioned {
+		if err := unstructured.SetNestedField(infraObj.Object, true, "status", "initialization", "provisioned"); err == nil {
+			if err := r.Status().Update(ctx, infraObj); err != nil {
+				log.V(1).Info("failed to patch infra cluster initialization.provisioned (field may not exist in CRD schema)", "error", err)
+			}
+		}
+	}
+
 	trueVal := true
 	cluster.Status.Initialization.InfrastructureProvisioned = &trueVal
 	if err := r.Status().Update(ctx, cluster); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// patchKubevirtMachinesInitialization patches KubevirtMachine objects that are
+// ready (status.ready=true) but missing status.initialization.provisioned.
+// This works around CAPK (v1beta1 contract) not setting the v1beta2 field
+// that the CAPI Machine controller requires before propagating providerID.
+func (r *OpenshiftAssistedControlPlaneReconciler) patchKubevirtMachinesInitialization(ctx context.Context, machines collections.Machines, namespace string) {
+	log := ctrl.LoggerFrom(ctx)
+	for _, machine := range machines {
+		infraRef := machine.Spec.InfrastructureRef
+		if infraRef.Kind != "KubevirtMachine" {
+			continue
+		}
+
+		kvMachine := &unstructured.Unstructured{}
+		kvMachine.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "infrastructure.cluster.x-k8s.io",
+			Version: "v1alpha1",
+			Kind:    "KubevirtMachine",
+		})
+		if err := r.Get(ctx, types.NamespacedName{Name: infraRef.Name, Namespace: namespace}, kvMachine); err != nil {
+			continue
+		}
+
+		ready, _, _ := unstructured.NestedBool(kvMachine.Object, "status", "ready")
+		if !ready {
+			continue
+		}
+
+		provisioned, _, _ := unstructured.NestedBool(kvMachine.Object, "status", "initialization", "provisioned")
+		if provisioned {
+			continue
+		}
+
+		if err := unstructured.SetNestedField(kvMachine.Object, true, "status", "initialization", "provisioned"); err != nil {
+			log.Error(err, "failed to set initialization.provisioned", "kubevirtMachine", infraRef.Name)
+			continue
+		}
+		if err := r.Status().Update(ctx, kvMachine); err != nil {
+			log.V(logutil.DebugLevel).Info("failed to patch KubevirtMachine initialization", "kubevirtMachine", infraRef.Name, "err", err)
+		} else {
+			log.Info("patched KubevirtMachine status.initialization.provisioned=true", "kubevirtMachine", infraRef.Name)
+		}
+	}
 }
 
 func getArchitectureFromBootstrapConfigs(ctx context.Context, k8sClient client.Client, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane) (string, error) {
@@ -598,6 +655,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 	machines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, cluster, collections.OwnedMachines(oacp, ownerGK))
 	if err != nil {
 		return err
+	}
+
+	// For KubeVirt platform: ensure KubevirtMachine objects have status.initialization.provisioned
+	// set once they are ready. This works around CAPK (v1beta1) not setting this v1beta2 field.
+	if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
+		r.patchKubevirtMachinesInitialization(ctx, machines, oacp.Namespace)
 	}
 
 	numMachines := machines.Len()

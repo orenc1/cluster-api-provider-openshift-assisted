@@ -52,14 +52,19 @@ func EnsureOSImageInAgentServiceConfig(ctx context.Context, c client.Client, ope
 	}
 
 	isoURL := fmt.Sprintf(
-		"https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/%s/latest/rhcos-%s-live.x86_64.iso",
-		majorMinor, majorMinor,
+		"https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/%s/latest/rhcos-live-iso.x86_64.iso",
+		majorMinor,
+	)
+	rootFSURL := fmt.Sprintf(
+		"https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/%s/latest/rhcos-live-rootfs.x86_64.img",
+		majorMinor,
 	)
 
 	asc.Spec.OSImages = append(asc.Spec.OSImages, aiv1beta1.OSImage{
 		OpenshiftVersion: majorMinor,
 		Version:          majorMinor,
 		Url:              isoURL,
+		RootFSUrl:        rootFSURL,
 		CPUArchitecture:  "x86_64",
 	})
 

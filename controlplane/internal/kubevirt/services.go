@@ -119,6 +119,17 @@ func EnsureExternalAccessServices(
 					Protocol:   corev1.ProtocolTCP,
 				},
 			}
+			if useRoutes {
+				// When using Routes, the kubeconfig is rewritten to port 443.
+				// The CAPI core controller resolves the tenant API hostname to this
+				// Service ClusterIP (via tenant-dns), so port 443 must also be present.
+				ports = append(ports, corev1.ServicePort{
+					Name:       "api-route",
+					Port:       443,
+					TargetPort: intstr.FromInt(6443),
+					Protocol:   corev1.ProtocolTCP,
+				})
+			}
 		} else {
 			ports = []corev1.ServicePort{
 				{
