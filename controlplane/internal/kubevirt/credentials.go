@@ -47,18 +47,29 @@ func EnsureInfraCredentialsManifests(
 		return nil
 	}
 	kvSpec := oacp.Spec.Config.KubeVirt
-	if kvSpec == nil || kvSpec.InfraClusterCredentials == nil {
+	if kvSpec == nil {
+		return nil
+	}
+
+	// Determine the credentials secret name: explicit config or derive from
+	// the KubevirtCluster's infraClusterSecretRef (named "infra-cluster-credentials" by convention)
+	credSecretName := ""
+	if kvSpec.InfraClusterCredentials != nil {
+		credSecretName = kvSpec.InfraClusterCredentials.Name
+	} else if kvSpec.CSIDriver != nil || (kvSpec.CloudControllerManager != nil && kvSpec.CloudControllerManager.Enabled) {
+		credSecretName = "infra-cluster-credentials"
+	} else {
 		return nil
 	}
 
 	// Read the source secret from the OACP namespace
 	sourceSecret := &corev1.Secret{}
 	if err := c.Get(ctx, client.ObjectKey{
-		Name:      kvSpec.InfraClusterCredentials.Name,
+		Name:      credSecretName,
 		Namespace: oacp.Namespace,
 	}, sourceSecret); err != nil {
 		return fmt.Errorf("failed to get infra credentials secret %s/%s: %w",
-			oacp.Namespace, kvSpec.InfraClusterCredentials.Name, err)
+			oacp.Namespace, credSecretName, err)
 	}
 
 	kubeconfigData := string(sourceSecret.Data["kubeconfig"])
@@ -99,7 +110,7 @@ metadata:
 type: Opaque
 stringData:
   infraClusterNamespace: %s
-  infraClusterKubeconfig: |
+  kubeconfig: |
 %s
 `, csiCredSecretName, infraNS, indentMultiline(kubeconfigData, 4)),
 		})

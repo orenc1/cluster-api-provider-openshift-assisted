@@ -397,7 +397,8 @@ type KubeVirtCCMSpec struct {
 type KubeVirtCSIDriverType string
 
 const (
-	// CSIDriverKubeVirt deploys the kubevirt-csi-driver-operator on the tenant cluster.
+	// CSIDriverKubeVirt deploys the kubevirt-csi-driver stack on the tenant cluster
+	// with a bash-based operator that aligns images to the OCP release payload.
 	CSIDriverKubeVirt KubeVirtCSIDriverType = "KubeVirt"
 
 	// CSIDriverNone disables CSI driver deployment; user manages storage independently.

@@ -43,7 +43,158 @@ const (
 	RHCOSGoldenPVCJobNamePrefix    = "rhcos-golden-import-"
 	RHCOSGoldenPVCDefaultSize      = "30Gi"
 	internalRegistryBase           = "image-registry.openshift-image-registry.svc:5000"
+
+	CliImageAnnotation    = "capoa.openshift.io/cli-image"
+	CliImageJobNamePrefix = "resolve-cli-image-"
+	CliImageConfigMap     = "capoa-cli-image"
 )
+
+// ResolveCliImage resolves the CLI image from the OCP release payload.
+// It uses a Job-based approach: on first call it creates a Job that runs
+// `oc adm release info --image-for=cli` and stores the result in a ConfigMap.
+// On subsequent calls it reads the ConfigMap and returns the resolved image.
+// Returns ("", nil) if the Job hasn't completed yet (caller should requeue).
+func ResolveCliImage(
+	ctx context.Context,
+	c client.Client,
+	oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane,
+	releaseImage string,
+	pullSecretName string,
+) (string, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// Check annotation first (cached result)
+	if oacp.Annotations != nil && oacp.Annotations[CliImageAnnotation] != "" {
+		return oacp.Annotations[CliImageAnnotation], nil
+	}
+
+	namespace := oacp.Namespace
+
+	// Check if the ConfigMap with the result already exists
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, client.ObjectKey{Name: CliImageConfigMap, Namespace: namespace}, cm); err == nil {
+		if img := cm.Data["cli-image"]; img != "" {
+			// Store in annotation for future fast-path
+			if oacp.Annotations == nil {
+				oacp.Annotations = make(map[string]string)
+			}
+			oacp.Annotations[CliImageAnnotation] = img
+			if err := c.Update(ctx, oacp); err != nil {
+				return "", fmt.Errorf("failed to store CLI image annotation: %w", err)
+			}
+			log.Info("resolved CLI image from release payload", "image", img)
+			return img, nil
+		}
+	}
+
+	// Check/create the resolution Job
+	majorMinor := extractMajorMinor(oacp.Spec.DistributionVersion)
+	if majorMinor == "" {
+		majorMinor = "latest"
+	}
+	jobName := CliImageJobNamePrefix + majorMinor
+
+	existingJob := &batchv1.Job{}
+	err := c.Get(ctx, client.ObjectKey{Name: jobName, Namespace: namespace}, existingJob)
+	if err == nil {
+		if existingJob.Status.Succeeded > 0 {
+			// Job completed but ConfigMap not yet read - will be picked up next reconcile
+			log.V(1).Info("CLI image resolution Job completed, waiting for ConfigMap")
+			return "", nil
+		}
+		if existingJob.Status.Failed > 0 {
+			log.Info("CLI image resolution Job failed, deleting for retry", "job", jobName)
+			_ = c.Delete(ctx, existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			return "", nil
+		}
+		log.V(1).Info("CLI image resolution Job still running", "job", jobName)
+		return "", nil
+	}
+	if !errors.IsNotFound(err) {
+		return "", fmt.Errorf("failed to check CLI image Job: %w", err)
+	}
+
+	// Create the Job
+	job := buildCliImageJob(jobName, namespace, releaseImage, pullSecretName)
+	if err := ctrl.SetControllerReference(oacp, job, c.Scheme()); err != nil {
+		return "", fmt.Errorf("failed to set owner reference on CLI image Job: %w", err)
+	}
+	if err := c.Create(ctx, job); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to create CLI image resolution Job: %w", err)
+	}
+	log.Info("created CLI image resolution Job", "job", jobName, "releaseImage", releaseImage)
+	return "", nil
+}
+
+func buildCliImageJob(name, namespace, releaseImage, pullSecretName string) *batchv1.Job {
+	script := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+echo "=== Resolving CLI image from release payload ==="
+CLI_IMAGE=$(oc adm release info "%s" --image-for=cli --registry-config=/pull-secret/.dockerconfigjson 2>/dev/null)
+if [ -z "$CLI_IMAGE" ]; then
+  echo "ERROR: Could not resolve cli image from release payload"
+  exit 1
+fi
+echo "Resolved CLI image: $CLI_IMAGE"
+
+# Store in ConfigMap
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: %s
+  namespace: %s
+data:
+  cli-image: "$CLI_IMAGE"
+EOF
+echo "=== Done ==="
+`, releaseImage, CliImageConfigMap, namespace)
+
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit: ptr.To(int32(3)),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					ServiceAccountName: "capoa-controlplane-manager",
+					Containers: []corev1.Container{
+						{
+							Name:    "resolve-cli",
+							Image:   "registry.redhat.io/openshift4/ose-tools-rhel9:latest",
+							Command: []string{"/bin/bash", "-c", script},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "pull-secret", MountPath: "/pull-secret", ReadOnly: true},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("50m"),
+									corev1.ResourceMemory: resource.MustParse("128Mi"),
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "pull-secret",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: pullSecretName,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
 
 // GoldenPVCName returns the deterministic name for the golden PVC for a given OCP version.
 func GoldenPVCName(openshiftVersion string) string {
@@ -276,8 +427,10 @@ func ensureInternalRegistrySecret(ctx context.Context, c client.Client, namespac
 const goldenPVCJobSAName = "capoa-controlplane-manager"
 
 // ensureJobServiceAccountRBAC ensures the ServiceAccount used by the golden PVC import
-// Job exists and has the required permissions: system:image-builder (to push to internal
-// registry) and anyuid SCC (skopeo needs it for container storage operations).
+// and CLI image resolution Jobs exists and has the required permissions:
+// - system:image-builder (to push to internal registry)
+// - anyuid SCC (skopeo needs it for container storage operations)
+// - configmaps access in the namespace (for CLI image resolution Job output)
 func ensureJobServiceAccountRBAC(ctx context.Context, c client.Client, namespace string) error {
 	// Ensure ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName, Namespace: namespace}}
@@ -319,6 +472,37 @@ func ensureJobServiceAccountRBAC(ctx context.Context, c client.Client, namespace
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to ensure anyuid ClusterRoleBinding: %w", err)
+	}
+
+	// Ensure Role for ConfigMap access in the namespace (needed by CLI image resolution Job)
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName + "-configmaps", Namespace: namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, role, func() error {
+		role.Rules = []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"configmaps"},
+			Verbs:     []string{"get", "list", "create", "update", "patch"},
+		}}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to ensure configmaps Role: %w", err)
+	}
+
+	// Ensure RoleBinding for the ConfigMap Role
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName + "-configmaps", Namespace: namespace}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, c, rb, func() error {
+		rb.RoleRef = rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     goldenPVCJobSAName + "-configmaps",
+		}
+		rb.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      goldenPVCJobSAName,
+			Namespace: namespace,
+		}}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to ensure configmaps RoleBinding: %w", err)
 	}
 
 	return nil

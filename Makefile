@@ -61,6 +61,9 @@ help: ## Display this help.
 manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	cd bootstrap && $(CONTROLLER_GEN) rbac:roleName=capoa-bootstrap-manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
 	cd controlplane && $(CONTROLLER_GEN) rbac:roleName=capoa-controlplane-manager-role crd webhook paths="./..." output:crd:artifacts:config=./config/crd/bases
+	@# Remove minProperties:1 from machineTemplate.metadata (upstream CAPI ObjectMeta marker; empty metadata must be valid)
+	@sed -i '/api-conventions.md#metadata/{n;/minProperties: 1/d}' \
+		controlplane/config/crd/bases/controlplane.cluster.x-k8s.io_openshiftassistedcontrolplanes.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

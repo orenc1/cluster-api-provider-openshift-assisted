@@ -18,6 +18,7 @@ package kubevirt
 
 import (
 	"fmt"
+	"hash/fnv"
 	"strings"
 )
 
@@ -66,9 +67,14 @@ func GenerateDNSProxyManifestsWithIPs(
 	var manifests []ManifestEntry
 
 	corefile := generateCorefile(fqdn, infraClusterDNSServiceIP, apiIPs, ingressIPs)
-	manifests = append(manifests, ManifestEntry{
-		Filename: "01-dns-proxy-configmap.yaml",
-		Content: fmt.Sprintf(`apiVersion: v1
+	// Always include the apps server block so CoreDNS loads the file plugin at
+	// startup. When IngressIPs become available later, the file plugin's built-in
+	// zone reload (triggered by SOA serial change) picks up new records without
+	// requiring a pod restart.
+	corefileContent := generateAppsCorefile(fqdn) + corefile
+	appsDbContent := generateAppsZoneFile(fqdn, ingressIPs)
+
+	cmData := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
   name: tenant-dns-corefile
@@ -76,7 +82,13 @@ metadata:
 data:
   Corefile: |
 %s
-`, namespace, indentMultiline(corefile, 4)),
+  apps.db: |
+%s
+`, namespace, indentMultiline(corefileContent, 4), indentMultiline(appsDbContent, 4))
+
+	manifests = append(manifests, ManifestEntry{
+		Filename: "01-dns-proxy-configmap.yaml",
+		Content:  cmData,
 	})
 
 	// DNS proxy DaemonSet
@@ -135,25 +147,23 @@ spec:
 
 // generateCorefile generates a CoreDNS Corefile for the DNS proxy.
 //
-// CRITICAL: The template plugin entries for wildcard *.apps resolution MUST use
-// the correct Go template syntax: {{ .Name }}
-// Using {[.Name]} or other incorrect syntax produces responses that resolvers
-// silently discard, causing hours of debugging.
+// For *.apps wildcard resolution, we use the CoreDNS "file" plugin with a wildcard
+// zone file instead of the "template" plugin. The template plugin's Go template
+// syntax ({{ .Name }}, {{ index .Match 1 }}) silently produces empty responses
+// (NOERROR with 0 answers) in CoreDNS v1.11.x, making it unsuitable for dynamic
+// wildcard resolution.
 //
-// apiIPs: IP addresses of control plane nodes (for api/api-int records)
-// ingressIPs: IP addresses for ingress (*.apps records)
+// The file plugin with a standard DNS wildcard record (*.apps) works reliably
+// across all CoreDNS versions.
+//
+// apiIPs: IP addresses for api/api-int resolution
+// ingressIPs: IP addresses for *.apps ingress resolution
 func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressIPs []string) string {
 	escapedFQDN := strings.ReplaceAll(fqdn, ".", "[.]")
 
-	var apiAnswers, ingressAnswers string
+	var apiAnswers string
 	for _, ip := range apiIPs {
 		apiAnswers += fmt.Sprintf("        answer \"api.%s 60 IN A %s\"\n", fqdn, ip)
-	}
-	for _, ip := range ingressIPs {
-		// CRITICAL: Use {{ .Name }} for wildcard template responses.
-		// Do NOT use {[.Name]} - it will produce malformed DNS responses
-		// that resolvers silently discard without any error message.
-		ingressAnswers += fmt.Sprintf("        answer \"{{ .Name }} 60 IN A %s\"\n", ip)
 	}
 
 	// If no IPs are known yet, use forward-only mode
@@ -161,6 +171,7 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 		return fmt.Sprintf(`%s:5353 {
     errors
     log
+    reload 10s
 
     template IN AAAA {
         match ".*"
@@ -183,9 +194,11 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 		apiIntAnswers += fmt.Sprintf("        answer \"api-int.%s 60 IN A %s\"\n", fqdn, ip)
 	}
 
+	// *.apps is handled by a separate server block using the file plugin (see generateAppsZoneFile)
 	return fmt.Sprintf(`%s:5353 {
     errors
     log
+    reload 10s
 
     template IN A api.%s {
         match "^api[.]%s[.]$"
@@ -194,11 +207,6 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 
     template IN A api-int.%s {
         match "^api-int[.]%s[.]$"
-%s        fallthrough
-    }
-
-    template IN A {
-        match ".*[.]apps[.]%s[.]$"
 %s        fallthrough
     }
 
@@ -215,7 +223,49 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
     forward . %s
     cache 30
 }
-`, fqdn, fqdn, escapedFQDN, apiAnswers, fqdn, escapedFQDN, apiIntAnswers, escapedFQDN, ingressAnswers, upstreamDNS)
+`, fqdn, fqdn, escapedFQDN, apiAnswers, fqdn, escapedFQDN, apiIntAnswers, upstreamDNS)
+}
+
+// generateAppsCorefile generates a separate CoreDNS server block for the *.apps
+// subdomain using the file plugin with a wildcard zone file.
+func generateAppsCorefile(fqdn string) string {
+	return fmt.Sprintf(`apps.%s:5353 {
+    file /etc/coredns/apps.db
+    reload 10s
+    errors
+    log
+}
+`, fqdn)
+}
+
+// generateAppsZoneFile generates a DNS zone file with wildcard A records for the
+// *.apps subdomain. This is used by the CoreDNS file plugin.
+// The SOA serial is derived from the IP list so that the file plugin detects
+// zone changes and reloads automatically.
+func generateAppsZoneFile(fqdn string, ingressIPs []string) string {
+	var records string
+	for _, ip := range ingressIPs {
+		records += fmt.Sprintf("*  60   IN A   %s\n", ip)
+	}
+	serial := zoneSerial(ingressIPs)
+	return fmt.Sprintf(`$ORIGIN apps.%s.
+@  3600 IN SOA ns.tenant-dns.svc.cluster.local. admin.tenant-dns.svc.cluster.local. %d 3600 900 604800 30
+@  3600 IN NS  ns.tenant-dns.svc.cluster.local.
+%s`, fqdn, serial, records)
+}
+
+// zoneSerial returns a deterministic SOA serial derived from the given IPs.
+// When IPs change the serial changes, triggering CoreDNS file plugin reload.
+func zoneSerial(ips []string) uint32 {
+	h := fnv.New32a()
+	for _, ip := range ips {
+		h.Write([]byte(ip))
+	}
+	s := h.Sum32()
+	if s == 0 {
+		return 1
+	}
+	return s
 }
 
 // GenerateTenantDNSForwarderManifests generates a day-0 manifest that configures

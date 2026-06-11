@@ -36,29 +36,63 @@ update_capoa_bootstrap() {
   echo "--- Updating CAPOA Bootstrap (image: $REGISTRY/capoa-bootstrap:$TAG) ---"
   oc set image deployment/capoa-bootstrap-controller-manager \
     manager="$REGISTRY/capoa-bootstrap:$TAG" -n "$NS"
-  oc rollout restart deployment/capoa-bootstrap-controller-manager -n "$NS"
+  oc patch deployment/capoa-bootstrap-controller-manager -n "$NS" --type='json' \
+    -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Always"}]'
   oc rollout status deployment/capoa-bootstrap-controller-manager -n "$NS" --timeout=60s
 
   if [ "$UPDATE_CRDS" = true ]; then
-    echo "  Applying bootstrap CRDs..."
-    oc apply -f "$CAPOA_ROOT/bootstrap/config/crd/bases/"
+    echo "  Applying bootstrap CRDs (via kustomize for contract labels + webhook config)..."
+    oc apply -k "$CAPOA_ROOT/bootstrap/config/crd/"
   fi
+
+  echo "  Applying RBAC..."
+  oc apply -f "$CAPOA_ROOT/bootstrap/config/rbac/role.yaml"
 }
 
 update_capoa_controlplane() {
   echo "--- Updating CAPOA Controlplane (image: $REGISTRY/capoa-controlplane:$TAG) ---"
   oc set image deployment/capoa-controlplane-controller-manager \
     manager="$REGISTRY/capoa-controlplane:$TAG" -n "$NS"
-  oc rollout restart deployment/capoa-controlplane-controller-manager -n "$NS"
+  oc patch deployment/capoa-controlplane-controller-manager -n "$NS" --type='json' \
+    -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Always"}]'
   oc rollout status deployment/capoa-controlplane-controller-manager -n "$NS" --timeout=60s
 
   if [ "$UPDATE_CRDS" = true ]; then
-    echo "  Applying controlplane CRDs..."
-    oc apply -f "$CAPOA_ROOT/controlplane/config/crd/bases/"
+    echo "  Applying controlplane CRDs (via kustomize for contract labels + webhook config)..."
+    oc apply -k "$CAPOA_ROOT/controlplane/config/crd/"
   fi
 
   echo "  Applying RBAC..."
-  oc apply -f "$CAPOA_ROOT/controlplane/config/rbac/role.yaml"
+  oc replace -f "$CAPOA_ROOT/controlplane/config/rbac/role.yaml"
+
+  echo "  Ensuring extra RBAC permissions..."
+  local SA="system:serviceaccount:${NS}:capoa-controlplane-controller-manager"
+  oc adm policy add-cluster-role-to-user system:image-builder "$SA" 2>/dev/null || true
+  oc adm policy add-scc-to-user anyuid "$SA" 2>/dev/null || true
+  cat <<EOF | oc apply -f - 2>/dev/null
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capoa-route-host
+rules:
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes/custom-host"]
+  verbs: ["create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: capoa-assisted-installer-access
+rules:
+- apiGroups: ["agent-install.openshift.io"]
+  resources: ["agents", "infraenvs"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["agent-install.openshift.io"]
+  resources: ["agents/status", "infraenvs/status"]
+  verbs: ["get"]
+EOF
+  oc adm policy add-cluster-role-to-user capoa-route-host "$SA" 2>/dev/null || true
+  oc adm policy add-cluster-role-to-user capoa-assisted-installer-access "$SA" 2>/dev/null || true
 }
 
 update_capk() {

@@ -91,11 +91,18 @@ func EnsureDNSProxy(
 		return fmt.Errorf("failed to ensure SCC for DNS proxy: %w", err)
 	}
 
-	// 2. CoreDNS ConfigMap
+	// 2. CoreDNS ConfigMap (Corefile + apps.db zone file for wildcard *.apps)
+	// Always include the apps server block so CoreDNS loads the file plugin from
+	// the start. The reload plugin + file plugin auto-reload handle later updates
+	// when IngressIPs become available, without requiring a pod restart.
 	corefile := generateCorefile(fqdn, "172.30.0.10", []string{config.APIIP}, config.IngressIPs)
+	cmData := map[string]string{
+		"Corefile": generateAppsCorefile(fqdn) + corefile,
+		"apps.db":  generateAppsZoneFile(fqdn, config.IngressIPs),
+	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSCorefileName, Namespace: TenantDNSNamespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, cm, func() error {
-		cm.Data = map[string]string{"Corefile": corefile}
+		cm.Data = cmData
 		return nil
 	}); err != nil {
 		return fmt.Errorf("failed to ensure corefile: %w", err)

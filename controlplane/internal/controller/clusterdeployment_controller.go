@@ -103,11 +103,17 @@ func (r *ClusterDeploymentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agentserviceconfigs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes/custom-host,verbs=create;update;patch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=ingresscontrollers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=dnses,verbs=get;list;watch;update;patch
 
@@ -277,12 +283,35 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, err
 		}
 
-		if _, err := kubevirt.EnsureKubeVirtManifests(ctx, r.Client, acp, infraNS, dnsIPs); err != nil {
+		// Resolve CLI image from the release payload (used by CSI bash operator)
+		cliPullSecretName := ""
+		if acp.Spec.Config.PullSecretRef != nil {
+			cliPullSecretName = acp.Spec.Config.PullSecretRef.Name
+		}
+		oseCliImage, err := kubevirt.ResolveCliImage(ctx, r.Client, acp, releaseImageWithDigest, cliPullSecretName)
+		if err != nil {
+			log.Error(err, "failed to resolve CLI image from release payload")
+			return ctrl.Result{}, err
+		}
+		if oseCliImage == "" {
+			log.V(1).Info("waiting for CLI image resolution from release payload")
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+
+		if _, err := kubevirt.EnsureKubeVirtManifests(ctx, r.Client, acp, infraNS, dnsIPs, oseCliImage); err != nil {
 			log.Error(err, "failed to create KubeVirt platform manifests")
 			return ctrl.Result{}, err
 		}
 		if err := kubevirt.EnsureInfraCredentialsManifests(ctx, r.Client, acp); err != nil {
 			log.Error(err, "failed to create KubeVirt infra credentials manifests")
+			return ctrl.Result{}, err
+		}
+
+		// Deploy MCS proxy for day-2 worker ignition download.
+		// This must run after EnsureExternalAccessServices (which creates the API service
+		// with the MCS NodePort that the proxy targets).
+		if _, err := kubevirt.EnsureMCSProxy(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
+			log.Error(err, "failed to ensure MCS proxy")
 			return ctrl.Result{}, err
 		}
 
@@ -348,7 +377,10 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 		aci.Spec.ImageSetRef = &hivev1.ClusterImageSetReference{Name: clusterDeployment.Name}
 		aci.Spec.Networking.ClusterNetwork = clusterNetwork
 		aci.Spec.Networking.ServiceNetwork = serviceNetwork
-		aci.Spec.ManifestsConfigMapRefs = additionalManifests
+		// ManifestsConfigMapRefs is immutable after install starts; only set on initial creation.
+		if len(aci.Spec.ManifestsConfigMapRefs) == 0 {
+			aci.Spec.ManifestsConfigMapRefs = additionalManifests
+		}
 
 		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
 			aci.Spec.APIVIPs = oacp.Spec.Config.APIVIPs
@@ -363,6 +395,19 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 				aci.Annotations = make(map[string]string)
 			}
 			aci.Annotations[InstallConfigOverrides] = installConfigOverride
+		}
+
+		// Set ignitionEndpoint for KubeVirt platform to enable day-2 worker addition.
+		// OVN-Kubernetes blocks port 22624 cluster-wide, so workers use a proxy service.
+		// Only set after initial install completes -- during installation, MCS is accessed
+		// directly via the API service (port 22623). Setting it at creation time causes
+		// assisted-service to fail validation on the empty ca_certificate field.
+		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt &&
+			conditions.IsTrue(&oacp, string(controlplanev1alpha3.KubeconfigAvailableCondition)) {
+			mcsProxySvcName := clusterDeployment.Labels[clusterv1.ClusterNameLabel] + "-" + kubevirt.MCSProxyServiceName
+			ignitionURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/config/worker",
+				mcsProxySvcName, clusterDeployment.Namespace, kubevirt.MCSProxyPort)
+			aci.Spec.IgnitionEndpoint = &hiveext.IgnitionEndpoint{Url: ignitionURL}
 		}
 
 		return nil
@@ -495,7 +540,9 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 		if acp.Spec.Config.KubeVirt.CSIDriver != nil && acp.Spec.Config.KubeVirt.CSIDriver.Type == controlplanev1alpha3.CSIDriverKubeVirt {
 			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.CSIManifestsConfigMapName})
 		}
-		if acp.Spec.Config.KubeVirt.InfraClusterCredentials != nil {
+		if acp.Spec.Config.KubeVirt.InfraClusterCredentials != nil ||
+			(acp.Spec.Config.KubeVirt.CSIDriver != nil && acp.Spec.Config.KubeVirt.CSIDriver.Type == controlplanev1alpha3.CSIDriverKubeVirt) ||
+			(acp.Spec.Config.KubeVirt.CloudControllerManager != nil && acp.Spec.Config.KubeVirt.CloudControllerManager.Enabled) {
 			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.InfraCredentialsCMName})
 		}
 		// Tenant DNS forwarder manifest - configures the tenant cluster's DNS operator
@@ -504,6 +551,8 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.TenantDNSFwdConfigName})
 		// Network MTU manifest - sets reduced MTU for double-encapsulated KubeVirt environment
 		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.NetworkMTUConfigMapName})
+		// MCS NodePort manifest - exposes MCS on NodePort range (bypasses OVN port 22624 block)
+		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.MCSManifestsConfigName})
 	}
 
 	return additionalManifests

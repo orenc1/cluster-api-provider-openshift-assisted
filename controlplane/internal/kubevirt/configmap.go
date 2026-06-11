@@ -35,12 +35,16 @@ import (
 // serviceIPs provides the ClusterIPs of the API and Ingress services, used to
 // configure the DNS proxy so api-int resolves to the service ClusterIP (enabling
 // MCS access during installation through the service).
+//
+// oseCliImage is the ose-cli image reference used by the bash-based CSI operator.
+// If empty, defaults to registry.redhat.io/openshift4/ose-cli:latest.
 func EnsureKubeVirtManifests(
 	ctx context.Context,
 	c client.Client,
 	oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane,
 	infraNamespace string,
 	serviceIPs *ServiceIPs,
+	oseCliImage string,
 ) ([]hiveext.ManifestsConfigMapReference, error) {
 	if oacp.Spec.Config.Platform != controlplanev1alpha3.PlatformKubeVirt {
 		return nil, nil
@@ -58,8 +62,8 @@ func EnsureKubeVirtManifests(
 		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: CCMManifestsConfigMapName})
 	}
 
-	// CSI operator manifests
-	csiManifests := GenerateCSIManifests(kvSpec, infraNamespace)
+	// CSI operator manifests (bash-based operator + full CSI driver stack)
+	csiManifests := GenerateCSIManifests(kvSpec, infraNamespace, oseCliImage)
 	if len(csiManifests) > 0 {
 		if err := ensureManifestsConfigMap(ctx, c, oacp, CSIManifestsConfigMapName, csiManifests); err != nil {
 			return nil, fmt.Errorf("failed to create CSI manifests ConfigMap: %w", err)
@@ -127,6 +131,18 @@ func EnsureKubeVirtManifests(
 			return nil, fmt.Errorf("failed to create tenant DNS forwarder manifests ConfigMap: %w", err)
 		}
 		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: TenantDNSFwdConfigName})
+	}
+
+	// MCS NodePort manifest (injected into tenant cluster).
+	// Creates a NodePort service for the Machine Config Server so that day-2 workers
+	// can download ignition configs. Port 22624 is blocked by OVN MCS firewall, but
+	// NodePort range (30000-32767) is allowed through br-ex.
+	mcsManifests := GenerateMCSNodePortManifests()
+	if len(mcsManifests) > 0 {
+		if err := ensureManifestsConfigMap(ctx, c, oacp, MCSManifestsConfigName, mcsManifests); err != nil {
+			return nil, fmt.Errorf("failed to create MCS manifests ConfigMap: %w", err)
+		}
+		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: MCSManifestsConfigName})
 	}
 
 	return refs, nil

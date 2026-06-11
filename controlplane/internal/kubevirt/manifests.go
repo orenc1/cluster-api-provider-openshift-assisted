@@ -221,8 +221,17 @@ spec:
 }
 
 // GenerateCSIManifests produces the list of manifest entries needed to deploy
-// the kubevirt-csi-driver-operator on the tenant cluster during installation.
-func GenerateCSIManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, infraNamespace string) []ManifestEntry {
+// the kubevirt-csi-driver stack and its bash-based operator on the tenant cluster.
+//
+// Instead of deploying a Go-based operator that manages the CSI workloads, this
+// generates the full set of static CSI resources (controller Deployment, node DaemonSet,
+// RBAC, etc.) with placeholder images, plus a lightweight bash operator that watches
+// ClusterVersion and patches the workloads with digest-pinned images from the OCP
+// release payload. The bash operator uses the ose-cli image (already in the payload).
+//
+// The oseCliImage parameter should be resolved from the OCP release payload at
+// manifest-generation time.
+func GenerateCSIManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, infraNamespace, oseCliImage string) []ManifestEntry {
 	if kvSpec == nil || kvSpec.CSIDriver == nil {
 		return nil
 	}
@@ -236,9 +245,13 @@ func GenerateCSIManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, inf
 		ns = kvSpec.InfraClusterNamespace
 	}
 
+	if oseCliImage == "" {
+		oseCliImage = "registry.redhat.io/openshift4/ose-cli:latest"
+	}
+
 	var manifests []ManifestEntry
 
-	// Namespace
+	// 01 - Namespace
 	manifests = append(manifests, ManifestEntry{
 		Filename: "01-csi-namespace.yaml",
 		Content: `apiVersion: v1
@@ -250,7 +263,7 @@ metadata:
 `,
 	})
 
-	// CSIDriver object
+	// 02 - CSIDriver
 	manifests = append(manifests, ManifestEntry{
 		Filename: "02-csi-driver.yaml",
 		Content: `apiVersion: storage.k8s.io/v1
@@ -260,119 +273,508 @@ metadata:
 spec:
   attachRequired: true
   podInfoOnMount: true
-  fsGroupPolicy: File
-  volumeLifecycleModes:
-    - Persistent
+  fsGroupPolicy: ReadWriteOnceWithFSType
 `,
 	})
 
-	// RBAC
+	// 03 - ConfigMap (driver configuration)
 	manifests = append(manifests, ManifestEntry{
-		Filename: "03-csi-rbac.yaml",
+		Filename: "03-csi-driver-config.yaml",
+		Content: fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: driver-config
+  namespace: openshift-cluster-csi-drivers
+data:
+  infraClusterNamespace: "%s"
+  infraClusterLabels: "csi-driver/cluster=tenant"
+`, ns),
+	})
+
+	// 04 - ServiceAccounts
+	manifests = append(manifests, ManifestEntry{
+		Filename: "04-csi-serviceaccounts.yaml",
 		Content: `apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kubevirt-csi-driver-operator
+  name: kubevirt-csi-controller-sa
   namespace: openshift-cluster-csi-drivers
 ---
-apiVersion: rbac.authorization.k8s.io/v1
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-csi-node-sa
+  namespace: openshift-cluster-csi-drivers
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-csi-operator-sa
+  namespace: openshift-cluster-csi-drivers
+`,
+	})
+
+	// 05 - Controller RBAC
+	manifests = append(manifests, ManifestEntry{
+		Filename: "05-csi-rbac-controller.yaml",
+		Content: `apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubevirt-csi-driver-operator
+  name: kubevirt-csi-controller-role
 rules:
   - apiGroups: [""]
-    resources: ["secrets", "serviceaccounts", "configmaps", "persistentvolumes"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims/status"]
-    verbs: ["patch"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch", "update"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "daemonsets"]
+    resources: ["nodes", "persistentvolumeclaims", "persistentvolumes", "pods", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["storage.k8s.io"]
-    resources: ["storageclasses", "csinodes", "csidrivers", "volumeattachments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["storage.k8s.io"]
-    resources: ["volumeattachments/status"]
-    verbs: ["patch"]
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
+    resources: ["storageclasses", "volumeattachments", "volumeattachments/status", "csinodes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kubevirt-csi-driver-operator
+  name: kubevirt-csi-controller-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-controller-sa
+    namespace: openshift-cluster-csi-drivers
+roleRef:
+  kind: ClusterRole
+  name: kubevirt-csi-controller-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-snapshotter-runner
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: csi-snapshotter-role-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-controller-sa
+    namespace: openshift-cluster-csi-drivers
+roleRef:
+  kind: ClusterRole
+  name: external-snapshotter-runner
+  apiGroup: rbac.authorization.k8s.io
+`,
+	})
+
+	// 06 - Node RBAC
+	manifests = append(manifests, ManifestEntry{
+		Filename: "06-csi-rbac-node.yaml",
+		Content: `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-csi-node-role
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "events"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirt-csi-node-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-node-sa
+    namespace: openshift-cluster-csi-drivers
+roleRef:
+  kind: ClusterRole
+  name: kubevirt-csi-node-role
+  apiGroup: rbac.authorization.k8s.io
+`,
+	})
+
+	// 07 - Operator RBAC (for the bash-based image-swap operator)
+	manifests = append(manifests, ManifestEntry{
+		Filename: "07-csi-rbac-operator.yaml",
+		Content: `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-csi-operator-role
+rules:
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirt-csi-operator-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-operator-sa
+    namespace: openshift-cluster-csi-drivers
+roleRef:
+  kind: ClusterRole
+  name: kubevirt-csi-operator-role
+  apiGroup: rbac.authorization.k8s.io
+`,
+	})
+
+	// 08 - SCC RoleBindings (privileged for controller and node)
+	manifests = append(manifests, ManifestEntry{
+		Filename: "08-csi-scc-rolebindings.yaml",
+		Content: `apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubevirt-csi-controller-privileged
+  namespace: openshift-cluster-csi-drivers
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kubevirt-csi-driver-operator
+  name: system:openshift:scc:privileged
 subjects:
   - kind: ServiceAccount
-    name: kubevirt-csi-driver-operator
+    name: kubevirt-csi-controller-sa
+    namespace: openshift-cluster-csi-drivers
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kubevirt-csi-node-privileged
+  namespace: openshift-cluster-csi-drivers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-node-sa
     namespace: openshift-cluster-csi-drivers
 `,
 	})
 
-	// Operator Deployment
+	// 09 - Controller Deployment (placeholder images, swapped by operator)
 	manifests = append(manifests, ManifestEntry{
-		Filename: "04-csi-operator-deployment.yaml",
+		Filename: "09-csi-controller-deployment.yaml",
 		Content: fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kubevirt-csi-driver-operator
+  name: kubevirt-csi-controller
   namespace: openshift-cluster-csi-drivers
-  labels:
-    app: kubevirt-csi-driver-operator
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: kubevirt-csi-driver-operator
+      app: kubevirt-csi-controller
   template:
     metadata:
       labels:
-        app: kubevirt-csi-driver-operator
+        app: kubevirt-csi-controller
     spec:
-      serviceAccountName: kubevirt-csi-driver-operator
+      serviceAccountName: kubevirt-csi-controller-sa
+      priorityClassName: system-cluster-critical
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: "NoSchedule"
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
       containers:
-        - name: operator
-          image: quay.io/openshift/kubevirt-csi-driver-operator:latest
+        - name: kubevirt-csi-driver
+          imagePullPolicy: Always
+          image: quay.io/kubevirt/kubevirt-csi-driver:latest
           args:
-            - --namespace=openshift-cluster-csi-drivers
-            - --infra-namespace=%s
-            - --infra-storage-class=%s
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--infra-cluster-namespace=$(INFRACLUSTER_NAMESPACE)"
+            - "--infra-cluster-kubeconfig=/var/run/secrets/infracluster/kubeconfig"
+            - "--infra-cluster-labels=$(INFRACLUSTER_LABELS)"
+            - "--run-node-service=false"
+            - "--run-controller-service=true"
+            - "--v=5"
+          ports:
+            - name: healthz
+              containerPort: 10301
+              protocol: TCP
           env:
-            - name: CSI_CONTROLLER_IMAGE
-              value: quay.io/kubevirt/csi-driver:latest
-            - name: CSI_NODE_IMAGE
-              value: quay.io/kubevirt/csi-driver:latest
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: INFRACLUSTER_NAMESPACE
+              valueFrom:
+                configMapKeyRef:
+                  name: driver-config
+                  key: infraClusterNamespace
+            - name: INFRACLUSTER_LABELS
+              valueFrom:
+                configMapKeyRef:
+                  name: driver-config
+                  key: infraClusterLabels
+            - name: INFRA_STORAGE_CLASS_ENFORCEMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: driver-config
+                  key: infraStorageClassEnforcement
+                  optional: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: infracluster
+              mountPath: "/var/run/secrets/infracluster"
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+        - name: csi-provisioner
+          image: quay.io/openshift/origin-csi-external-provisioner:latest
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--default-fstype=ext4"
+            - "--v=5"
+            - "--timeout=3m"
+            - "--retry-interval-max=1m"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+        - name: csi-attacher
+          image: quay.io/openshift/origin-csi-external-attacher:latest
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v=5"
+            - "--timeout=3m"
+            - "--retry-interval-max=1m"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+        - name: csi-liveness-probe
+          image: quay.io/openshift/origin-csi-livenessprobe:latest
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--probe-timeout=3s"
+            - "--health-port=10301"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+        - name: csi-snapshotter
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v4.2.1
+          args:
+            - "--v=3"
+            - "--csi-address=/csi/csi.sock"
+            - "--timeout=3m"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+          resources:
+            requests:
+              memory: 20Mi
+              cpu: 10m
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.1
+          args:
+            - "-csi-address=/csi/csi.sock"
+            - "-v=5"
+            - "-timeout=3m"
+            - "-handle-volume-inuse-error=false"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
           resources:
             requests:
               cpu: 10m
-              memory: 50Mi
-      tolerations:
-        - key: node-role.kubernetes.io/master
-          operator: Exists
-          effect: NoSchedule
-      nodeSelector:
-        node-role.kubernetes.io/master: ""
-`, ns, infraSC),
+              memory: 20Mi
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: infracluster
+          secret:
+            secretName: %s
+`, csiCredSecretName),
 	})
 
-	// StorageClass (if infra storage class is specified)
+	// 10 - Node DaemonSet (placeholder images, swapped by operator)
+	manifests = append(manifests, ManifestEntry{
+		Filename: "10-csi-node-daemonset.yaml",
+		Content: `apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kubevirt-csi-node
+  namespace: openshift-cluster-csi-drivers
+spec:
+  selector:
+    matchLabels:
+      app: kubevirt-csi-driver
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: kubevirt-csi-driver
+    spec:
+      serviceAccountName: kubevirt-csi-node-sa
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: csi-driver
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+          imagePullPolicy: Always
+          image: quay.io/kubevirt/kubevirt-csi-driver:latest
+          args:
+            - "--endpoint=unix:/csi/csi.sock"
+            - "--node-name=$(KUBE_NODE_NAME)"
+            - "--run-node-service=true"
+            - "--run-controller-service=false"
+            - "--v=5"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+            - name: device-dir
+              mountPath: /dev
+            - name: udev
+              mountPath: /run/udev
+          ports:
+            - name: healthz
+              containerPort: 10300
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+        - name: csi-node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.8.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
+            - "--v=5"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "rm -rf /registration/csi.kubevirt.io-reg.sock /csi/csi.sock"]
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: DRIVER_REG_SOCK_PATH
+              value: /var/lib/kubelet/plugins/csi.kubevirt.io/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            requests:
+              memory: 20Mi
+              cpu: 5m
+        - name: csi-liveness-probe
+          image: quay.io/openshift/origin-csi-livenessprobe:latest
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--probe-timeout=3s"
+            - "--health-port=10300"
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          resources:
+            requests:
+              memory: 20Mi
+              cpu: 5m
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.kubevirt.io/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: udev
+          hostPath:
+            path: /run/udev
+`,
+	})
+
+	// 11 - StorageClass
 	if infraSC != "" {
 		manifests = append(manifests, ManifestEntry{
-			Filename: "05-csi-storageclass.yaml",
+			Filename: "11-csi-storageclass.yaml",
 			Content: fmt.Sprintf(`apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
@@ -385,13 +787,103 @@ parameters:
   bus: scsi
 reclaimPolicy: Delete
 allowVolumeExpansion: true
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate
 `, infraSC),
 		})
 	}
 
+	// 12 - Operator script ConfigMap
+	manifests = append(manifests, ManifestEntry{
+		Filename: "12-csi-operator-script.yaml",
+		Content: fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubevirt-csi-operator-script
+  namespace: openshift-cluster-csi-drivers
+data:
+  operator.sh: |
+%s`, indentScript(CSIOperatorScript, 4)),
+	})
+
+	// 13 - Operator Deployment (bash-based, uses ose-cli image)
+	manifests = append(manifests, ManifestEntry{
+		Filename: "13-csi-operator-deployment.yaml",
+		Content: fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubevirt-csi-operator
+  namespace: openshift-cluster-csi-drivers
+  labels:
+    app: kubevirt-csi-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kubevirt-csi-operator
+  template:
+    metadata:
+      labels:
+        app: kubevirt-csi-operator
+    spec:
+      serviceAccountName: kubevirt-csi-operator-sa
+      containers:
+        - name: operator
+          image: %s
+          command: ["/bin/bash", "/scripts/operator.sh"]
+          env:
+            - name: RECONCILE_INTERVAL
+              value: "60"
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+            - name: config
+              mountPath: /config
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 50Mi
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      volumes:
+        - name: script
+          configMap:
+            name: kubevirt-csi-operator-script
+            defaultMode: 0755
+        - name: config
+          configMap:
+            name: driver-config
+`, oseCliImage),
+	})
+
 	return manifests
 }
+
+// indentScript prepends each line of the script with the given number of spaces.
+func indentScript(script string, spaces int) string {
+	prefix := ""
+	for i := 0; i < spaces; i++ {
+		prefix += " "
+	}
+	result := ""
+	for _, line := range splitLines(script) {
+		if line == "" {
+			result += "\n"
+		} else {
+			result += prefix + line + "\n"
+		}
+	}
+	return result
+}
+
 
 // GenerateNetworkMTUManifests produces manifests to configure the tenant cluster's
 // network MTU for KubeVirt environments.
