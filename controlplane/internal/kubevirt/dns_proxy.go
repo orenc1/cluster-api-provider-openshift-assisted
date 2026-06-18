@@ -252,7 +252,7 @@ func ensureSCCForDNSProxy(ctx context.Context, c client.Client) error {
 // GetRouterNodeIPs returns the pod IPs of virt-launcher pods for the cluster's
 // control plane. These VMs run the tenant router (hostNetwork:true) and should
 // be used for *.apps DNS resolution to avoid hairpin NAT.
-func GetRouterNodeIPs(ctx context.Context, c client.Client, clusterName, namespace string) ([]string, error) {
+func GetRouterNodeIPs(ctx context.Context, c client.Reader, clusterName, namespace string) ([]string, error) {
 	pods := &corev1.PodList{}
 	if err := c.List(ctx, pods,
 		client.InNamespace(namespace),

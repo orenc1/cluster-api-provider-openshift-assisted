@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	CCMManifestsConfigMapName  = "kubevirt-ccm-manifests"
-	CSIManifestsConfigMapName  = "kubevirt-csi-manifests"
-	NetworkMTUConfigMapName    = "kubevirt-network-mtu-manifests"
-	KubeVirtTenantClusterMTU   = 1300
+	CCMManifestsConfigMapName      = "kubevirt-ccm-manifests"
+	CSIManifestsConfigMapName      = "kubevirt-csi-manifests"
+	NetworkMTUConfigMapName        = "kubevirt-network-mtu-manifests"
+	ResolvFixManifestsConfigMapName = "kubevirt-resolv-fix-manifests"
+	KubeVirtTenantClusterMTU       = 1300
 )
 
 // ManifestEntry represents a single manifest file to inject during installation.
@@ -884,6 +885,54 @@ func indentScript(script string, spaces int) string {
 	return result
 }
 
+
+// GenerateResolvFixManifests produces a MachineConfig that ensures DNS resolution
+// works during node first boot for BareMetal platform clusters.
+//
+// On BareMetal platform, the MCO renders ignition that sets /etc/resolv.conf to the
+// cluster DNS ClusterIP (172.30.0.10) and configures NM with dns=none. The
+// on-prem-resolv-prepender service is supposed to fix DNS by prepending the VIP-based
+// nameserver, but it needs to pull a container image first — creating a deadlock since
+// DNS is broken at that point.
+//
+// This MachineConfig adds a lightweight systemd service that runs BEFORE the
+// resolv-prepender and copies the working DHCP-based DNS from NetworkManager's
+// internal resolv.conf to /etc/resolv.conf, breaking the deadlock.
+func GenerateResolvFixManifests() []ManifestEntry {
+	return []ManifestEntry{
+		{
+			Filename: "00-fix-resolv-firstboot.yaml",
+			Content: `apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 00-fix-resolv-firstboot
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+      - name: fix-resolv-firstboot.service
+        enabled: true
+        contents: |
+          [Unit]
+          Description=Ensure working DNS before resolv-prepender on first boot
+          Before=on-prem-resolv-prepender.service nodeip-configuration.service
+          After=NetworkManager-wait-online.service
+          ConditionPathExists=/run/NetworkManager/resolv.conf
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'while ! grep -q nameserver /run/NetworkManager/resolv.conf 2>/dev/null; do sleep 0.5; done; cp /run/NetworkManager/resolv.conf /etc/resolv.conf'
+
+          [Install]
+          WantedBy=multi-user.target
+`,
+		},
+	}
+}
 
 // GenerateNetworkMTUManifests produces manifests to configure the tenant cluster's
 // network MTU for KubeVirt environments.

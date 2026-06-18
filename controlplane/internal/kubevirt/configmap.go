@@ -71,17 +71,32 @@ func EnsureKubeVirtManifests(
 		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: CSIManifestsConfigMapName})
 	}
 
-	// Network MTU manifest (injected into tenant cluster).
-	// KubeVirt VMs running inside pods have a reduced MTU due to encapsulation.
-	// The tenant cluster's OVN adds another layer of Geneve encapsulation (58 bytes),
-	// so the tenant cluster network MTU must be lower than the VM's interface MTU.
-	// Using 1300 as a safe value that works across all infra cluster configurations.
-	networkMTUManifests := GenerateNetworkMTUManifests()
-	if len(networkMTUManifests) > 0 {
-		if err := ensureManifestsConfigMap(ctx, c, oacp, NetworkMTUConfigMapName, networkMTUManifests); err != nil {
-			return nil, fmt.Errorf("failed to create network MTU manifests ConfigMap: %w", err)
+	// Resolv fix manifest (injected into tenant cluster).
+	// For bridge-networking clusters with VIPs, the BareMetal platform generates a
+	// resolv-prepender that deadlocks on first boot because /etc/resolv.conf points to
+	// the unreachable cluster DNS IP (172.30.0.10). This MachineConfig adds an early-boot
+	// service that copies working DHCP DNS before the resolv-prepender starts.
+	if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
+		resolvFixManifests := GenerateResolvFixManifests()
+		if len(resolvFixManifests) > 0 {
+			if err := ensureManifestsConfigMap(ctx, c, oacp, ResolvFixManifestsConfigMapName, resolvFixManifests); err != nil {
+				return nil, fmt.Errorf("failed to create resolv fix manifests ConfigMap: %w", err)
+			}
+			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: ResolvFixManifestsConfigMapName})
 		}
-		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: NetworkMTUConfigMapName})
+	}
+
+	// Network MTU manifest (injected into tenant cluster).
+	// KubeVirt VMs running inside pods have a reduced MTU due to double encapsulation.
+	// Bridge-networking VMs use the host network MTU directly — no reduction needed.
+	if len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0 {
+		networkMTUManifests := GenerateNetworkMTUManifests()
+		if len(networkMTUManifests) > 0 {
+			if err := ensureManifestsConfigMap(ctx, c, oacp, NetworkMTUConfigMapName, networkMTUManifests); err != nil {
+				return nil, fmt.Errorf("failed to create network MTU manifests ConfigMap: %w", err)
+			}
+			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: NetworkMTUConfigMapName})
+		}
 	}
 
 	// DNS proxy manifests (deployed on infra cluster, not injected into tenant).
@@ -122,27 +137,34 @@ func EnsureKubeVirtManifests(
 	// These configure the tenant's DNS operator to forward queries for the tenant's
 	// own FQDN back to the infra cluster's DNS, which has a forwarding rule to the
 	// tenant-dns proxy. The zone must be the full FQDN, not just baseDomain.
-	tenantDNSManifests := GenerateTenantDNSForwarderManifests(
-		fmt.Sprintf("%s.%s", clusterName, oacp.Spec.Config.BaseDomain),
-		nil, // In KubeVirt mode, VMs reach infra DNS directly via ClusterIP
-	)
-	if len(tenantDNSManifests) > 0 {
-		if err := ensureManifestsConfigMap(ctx, c, oacp, TenantDNSFwdConfigName, tenantDNSManifests); err != nil {
-			return nil, fmt.Errorf("failed to create tenant DNS forwarder manifests ConfigMap: %w", err)
+	// Only needed for pod-networking clusters (no VIPs) where VMs can reach infra
+	// ClusterIPs directly. Bridge-networking clusters use standard upstream DNS.
+	if len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0 {
+		tenantDNSManifests := GenerateTenantDNSForwarderManifests(
+			fmt.Sprintf("%s.%s", clusterName, oacp.Spec.Config.BaseDomain),
+			nil, // In KubeVirt mode, VMs reach infra DNS directly via ClusterIP
+		)
+		if len(tenantDNSManifests) > 0 {
+			if err := ensureManifestsConfigMap(ctx, c, oacp, TenantDNSFwdConfigName, tenantDNSManifests); err != nil {
+				return nil, fmt.Errorf("failed to create tenant DNS forwarder manifests ConfigMap: %w", err)
+			}
+			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: TenantDNSFwdConfigName})
 		}
-		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: TenantDNSFwdConfigName})
 	}
 
 	// MCS NodePort manifest (injected into tenant cluster).
 	// Creates a NodePort service for the Machine Config Server so that day-2 workers
 	// can download ignition configs. Port 22624 is blocked by OVN MCS firewall, but
 	// NodePort range (30000-32767) is allowed through br-ex.
-	mcsManifests := GenerateMCSNodePortManifests()
-	if len(mcsManifests) > 0 {
-		if err := ensureManifestsConfigMap(ctx, c, oacp, MCSManifestsConfigName, mcsManifests); err != nil {
-			return nil, fmt.Errorf("failed to create MCS manifests ConfigMap: %w", err)
+	// Only needed for pod-networking; bridge-networking workers reach MCS via API VIP/haproxy.
+	if len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0 {
+		mcsManifests := GenerateMCSNodePortManifests()
+		if len(mcsManifests) > 0 {
+			if err := ensureManifestsConfigMap(ctx, c, oacp, MCSManifestsConfigName, mcsManifests); err != nil {
+				return nil, fmt.Errorf("failed to create MCS manifests ConfigMap: %w", err)
+			}
+			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: MCSManifestsConfigName})
 		}
-		refs = append(refs, hiveext.ManifestsConfigMapReference{Name: MCSManifestsConfigName})
 	}
 
 	return refs, nil

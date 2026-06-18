@@ -19,12 +19,15 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util"
 	logutil "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/util/log"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
+	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	aimodels "github.com/openshift/assisted-service/models"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -32,11 +35,20 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
+	capiutil "sigs.k8s.io/cluster-api/util"
+	"sigs.k8s.io/cluster-api/util/collections"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-const kubeconfigSecretKey = "kubeconfig"
+const (
+	kubeconfigSecretKey = "kubeconfig"
+
+	// InstallationRetryAnnotation tracks the number of automatic installation retries.
+	InstallationRetryAnnotation = "controlplane.cluster.x-k8s.io/installation-retry-count"
+	// MaxInstallationRetries is the maximum number of auto-retries before giving up.
+	MaxInstallationRetries = 3
+)
 
 // AgentClusterInstallReconciler reconciles a AgentClusterInstall object
 type AgentClusterInstallReconciler struct {
@@ -51,11 +63,14 @@ func (r *AgentClusterInstallReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Complete(r)
 }
 
-// +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls,verbs=get;list;watch
+// +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=extensions.hive.openshift.io,resources=agentclusterinstalls/status,verbs=get
-// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=openshiftassistedcontrolplanes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=openshiftassistedcontrolplanes,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=controlplane.cluster.x-k8s.io,resources=openshiftassistedcontrolplanes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=machines,verbs=get;list;watch;delete
+// +kubebuilder:rbac:groups=cluster.x-k8s.io,resources=clusters,verbs=get;list;watch
 
 func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
@@ -76,6 +91,13 @@ func (r *AgentClusterInstallReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 	log.WithValues("openshiftassisted_control_plane", oacp.Name, "openshiftassisted_control_plane_namespace", oacp.Namespace)
+
+	// Auto-retry: if the installation has failed, reset and retry (KubeVirt platform only).
+	if isInstallationFailed(aci) {
+		if result, err := r.handleInstallationFailure(ctx, aci, &oacp); err != nil || !result.IsZero() {
+			return result, err
+		}
+	}
 
 	if err := r.reconcile(ctx, aci, &oacp); err != nil {
 		return ctrl.Result{}, err
@@ -249,6 +271,104 @@ func (r *AgentClusterInstallReconciler) updateControlplaneStatus(ctx context.Con
 		return err
 	}
 	return nil
+}
+
+func isInstallationFailed(aci *hiveext.AgentClusterInstall) bool {
+	return aci.Status.DebugInfo.State == aimodels.ClusterStatusError
+}
+
+// handleInstallationFailure implements auto-retry for failed installations on KubeVirt platform.
+// When installation fails (typically due to transient network issues), it resets the cluster
+// by deleting the ACI, InfraEnvs, and Machines. The existing controllers recreate everything
+// automatically, giving the installation a fresh attempt.
+func (r *AgentClusterInstallReconciler) handleInstallationFailure(
+	ctx context.Context,
+	aci *hiveext.AgentClusterInstall,
+	oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane,
+) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+
+	// Only auto-retry for KubeVirt platform clusters
+	if oacp.Spec.Config.Platform != controlplanev1alpha3.PlatformKubeVirt {
+		log.Info("installation failed but auto-retry is only supported for KubeVirt platform")
+		return ctrl.Result{}, nil
+	}
+
+	retryCount := getRetryCount(oacp)
+	if retryCount >= MaxInstallationRetries {
+		log.Info("installation failed and max retries exceeded",
+			"retryCount", retryCount, "maxRetries", MaxInstallationRetries)
+		setConditionFalse(oacp, controlplanev1alpha3.ControlPlaneAvailableCondition,
+			"InstallationFailedMaxRetries",
+			"Installation failed after %d retries: %s", retryCount, aci.Status.DebugInfo.StateInfo)
+		return ctrl.Result{}, r.updateControlplaneStatus(ctx, oacp)
+	}
+
+	log.Info("installation failed, initiating automatic retry",
+		"retryCount", retryCount+1, "maxRetries", MaxInstallationRetries,
+		"reason", aci.Status.DebugInfo.StateInfo)
+
+	// Increment retry counter
+	if err := r.setRetryCount(ctx, oacp, retryCount+1); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update retry count: %w", err)
+	}
+
+	// Delete all InfraEnvs in the namespace (they'll be recreated by the bootstrap controller)
+	infraEnvList := &aiv1beta1.InfraEnvList{}
+	if err := r.List(ctx, infraEnvList, client.InNamespace(oacp.Namespace)); err == nil {
+		for i := range infraEnvList.Items {
+			if err := r.Delete(ctx, &infraEnvList.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to delete InfraEnv", "name", infraEnvList.Items[i].Name)
+			}
+		}
+	}
+
+	// Delete ALL Machines in the cluster (both CP and workers get fresh disks)
+	cluster, err := capiutil.GetOwnerCluster(ctx, r.Client, oacp.ObjectMeta)
+	if err == nil && cluster != nil {
+		allMachines, err := collections.GetFilteredMachinesForCluster(ctx, r.Client, cluster)
+		if err == nil {
+			for _, machine := range allMachines {
+				log.Info("deleting machine for retry", "machine", machine.Name)
+				if err := r.Delete(ctx, machine); err != nil && !apierrors.IsNotFound(err) {
+					log.Error(err, "failed to delete machine", "name", machine.Name)
+				}
+			}
+		}
+	}
+
+	// Delete the ACI itself — the ClusterDeployment controller will recreate it,
+	// which re-registers the cluster with the assisted-service backend.
+	log.Info("deleting AgentClusterInstall to trigger re-registration")
+	if err := r.Delete(ctx, aci); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("failed to delete ACI for retry: %w", err)
+	}
+
+	// Requeue after a delay to allow cleanup to propagate
+	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+}
+
+func getRetryCount(oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane) int {
+	if oacp.Annotations == nil {
+		return 0
+	}
+	countStr, ok := oacp.Annotations[InstallationRetryAnnotation]
+	if !ok {
+		return 0
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func (r *AgentClusterInstallReconciler) setRetryCount(ctx context.Context, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, count int) error {
+	if oacp.Annotations == nil {
+		oacp.Annotations = make(map[string]string)
+	}
+	oacp.Annotations[InstallationRetryAnnotation] = strconv.Itoa(count)
+	return r.Update(ctx, oacp)
 }
 
 // GenerateSecretWithOwner returns a Kubernetes secret for the given Cluster name, namespace, kubeconfig data, and ownerReference.

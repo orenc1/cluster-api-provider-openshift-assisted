@@ -68,6 +68,7 @@ type ClusterDeploymentReconciler struct {
 	client.Client
 	Scheme      *runtime.Scheme
 	RemoteImage containers.RemoteImage
+	APIReader   client.Reader
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -231,56 +232,57 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			}
 		}
 
-		// Determine DNS target IPs for api/api-int resolution.
-		// Two phases:
-		//
-		// Phase 1 (during installation - kubeconfig NOT available):
-		//   Point api/api-int to the BOOTSTRAP pod IP directly.
-		//   The service load-balances across all control plane VMs, but only the
-		//   bootstrap VM runs the API server and MCS during installation. Using
-		//   the service ClusterIP causes ~2/3 of connections to fail (routed to
-		//   non-ready VMs), stalling installation.
-		//
-		// Phase 2 (after installation - kubeconfig IS available):
-		//   Switch to the service ClusterIP for proper load balancing across all
-		//   nodes now that they all run kube-apiserver.
+		// DNS proxy is only needed for pod-networking topologies where VMs are
+		// not directly reachable from outside the cluster. When VIPs are configured,
+		// the cluster uses keepalived and external DNS resolves directly to the VIPs.
+		needsDNSProxy := len(acp.Spec.Config.APIVIPs) == 0 && len(acp.Spec.Config.IngressVIPs) == 0
 		kubeconfigAvailable := conditions.IsTrue(acp, string(controlplanev1alpha3.KubeconfigAvailableCondition))
-		dnsIPs := serviceIPs
-		if !kubeconfigAvailable {
-			bootstrapIP, bErr := kubevirt.GetBootstrapPodIP(ctx, r.Client, clusterDeployment.Spec.ClusterName, acp.Namespace)
-			if bErr != nil {
-				log.V(1).Info("could not resolve bootstrap pod IP, falling back to service ClusterIP", "error", bErr)
-			} else if bootstrapIP != "" {
-				log.Info("using bootstrap pod IP for DNS resolution during installation", "bootstrapIP", bootstrapIP)
-				dnsIPs = &kubevirt.ServiceIPs{
-					APIClusterIP: bootstrapIP,
+		var manifestDNSIPs *kubevirt.ServiceIPs
+
+		if needsDNSProxy {
+			// Determine DNS target IPs for api/api-int resolution.
+			// Phase 1 (during installation): Point to bootstrap pod IP directly.
+			// Phase 2 (after installation): Switch to service ClusterIP for load balancing.
+			manifestDNSIPs = serviceIPs
+			if !kubeconfigAvailable {
+				bootstrapIP, bErr := kubevirt.GetBootstrapPodIP(ctx, r.APIReader, clusterDeployment.Spec.ClusterName, acp.Namespace)
+				if bErr != nil {
+					log.V(1).Info("could not resolve bootstrap pod IP, falling back to service ClusterIP", "error", bErr)
+				} else if bootstrapIP != "" {
+					log.Info("using bootstrap pod IP for DNS resolution during installation", "bootstrapIP", bootstrapIP)
+					manifestDNSIPs = &kubevirt.ServiceIPs{
+						APIClusterIP: bootstrapIP,
+					}
+					if serviceIPs != nil {
+						manifestDNSIPs.IngressClusterIP = serviceIPs.IngressClusterIP
+					}
 				}
-				if serviceIPs != nil {
-					dnsIPs.IngressClusterIP = serviceIPs.IngressClusterIP
-				}
+			} else {
+				log.V(1).Info("kubeconfig available, using service ClusterIP for DNS")
+			}
+
+			// Get VM pod IPs for *.apps DNS resolution.
+			routerIPs, _ := kubevirt.GetRouterNodeIPs(ctx, r.APIReader, clusterDeployment.Spec.ClusterName, acp.Namespace)
+
+			apiIP := ""
+			if manifestDNSIPs != nil {
+				apiIP = manifestDNSIPs.APIClusterIP
+			}
+			dnsConfig := &kubevirt.DNSProxyConfig{
+				APIIP:      apiIP,
+				IngressIPs: routerIPs,
+			}
+			if err := kubevirt.EnsureDNSProxy(ctx, r.Client, acp, dnsConfig); err != nil {
+				log.Error(err, "failed to ensure DNS proxy")
+				return ctrl.Result{}, err
+			}
+
+			if len(routerIPs) == 0 && !kubeconfigAvailable {
+				log.Info("DNS proxy deployed but no VM pod IPs available yet, requeueing")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 			}
 		} else {
-			log.V(1).Info("kubeconfig available, using service ClusterIP for DNS")
-		}
-
-		// Get VM pod IPs for *.apps DNS resolution.
-		// The tenant router uses hostNetwork and binds to the VM pod IPs.
-		// Using these directly (instead of the infra ingress ClusterIP) avoids
-		// hairpin NAT issues when traffic from tenant pods traverses the infra service.
-		routerIPs, _ := kubevirt.GetRouterNodeIPs(ctx, r.Client, clusterDeployment.Spec.ClusterName, acp.Namespace)
-
-		// Deploy/update the DNS proxy on the infra cluster
-		apiIP := ""
-		if dnsIPs != nil {
-			apiIP = dnsIPs.APIClusterIP
-		}
-		dnsConfig := &kubevirt.DNSProxyConfig{
-			APIIP:      apiIP,
-			IngressIPs: routerIPs,
-		}
-		if err := kubevirt.EnsureDNSProxy(ctx, r.Client, acp, dnsConfig); err != nil {
-			log.Error(err, "failed to ensure DNS proxy")
-			return ctrl.Result{}, err
+			log.Info("VIPs configured, skipping DNS proxy (bridge networking)")
 		}
 
 		// Resolve CLI image from the release payload (used by CSI bash operator)
@@ -298,7 +300,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
 		}
 
-		if _, err := kubevirt.EnsureKubeVirtManifests(ctx, r.Client, acp, infraNS, dnsIPs, oseCliImage); err != nil {
+		if _, err := kubevirt.EnsureKubeVirtManifests(ctx, r.Client, acp, infraNS, manifestDNSIPs, oseCliImage); err != nil {
 			log.Error(err, "failed to create KubeVirt platform manifests")
 			return ctrl.Result{}, err
 		}
@@ -307,12 +309,14 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			return ctrl.Result{}, err
 		}
 
-		// Deploy MCS proxy for day-2 worker ignition download.
-		// This must run after EnsureExternalAccessServices (which creates the API service
-		// with the MCS NodePort that the proxy targets).
-		if _, err := kubevirt.EnsureMCSProxy(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
-			log.Error(err, "failed to ensure MCS proxy")
-			return ctrl.Result{}, err
+		// Deploy MCS proxy for day-2 worker ignition download (pod-networking only).
+		// Bridge-networking workers reach MCS via the API VIP through haproxy,
+		// which is not subject to OVN's MCS firewall.
+		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
+			if _, err := kubevirt.EnsureMCSProxy(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
+				log.Error(err, "failed to ensure MCS proxy")
+				return ctrl.Result{}, err
+			}
 		}
 
 		// NOTE: DNS wildcard validation is no longer disabled here.
@@ -363,8 +367,10 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 
 		aci.Spec.ClusterDeploymentRef = corev1.LocalObjectReference{Name: clusterDeployment.Name}
 		aci.Spec.PlatformType = getAgentClusterInstallPlatformType(oacp)
-		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt || oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformExternal {
+		if aci.Spec.PlatformType == hiveext.ExternalPlatformType {
 			aci.Spec.ExternalPlatformSpec = getExternalPlatformSpec(oacp)
+		} else {
+			aci.Spec.ExternalPlatformSpec = nil
 		}
 		aci.Spec.ProvisionRequirements = hiveext.ProvisionRequirements{
 			ControlPlaneAgents: int(oacp.Spec.Replicas),
@@ -399,11 +405,13 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 
 		// Set ignitionEndpoint for KubeVirt platform to enable day-2 worker addition.
 		// OVN-Kubernetes blocks port 22624 cluster-wide, so workers use a proxy service.
-		// Only set after initial install completes -- during installation, MCS is accessed
-		// directly via the API service (port 22623). Setting it at creation time causes
-		// assisted-service to fail validation on the empty ca_certificate field.
+		// Defer until AdminPasswordSecretRef is set on the ACI metadata — this confirms
+		// assisted-service completed its post-install metadata flow. Setting it earlier
+		// triggers a bug where assisted-service's parseIgnitionEndpoint sets CaCertificate=""
+		// for HTTP endpoints, which fails validation and blocks the entire reconcile loop
+		// (including admin password secret creation).
 		if oacp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt &&
-			conditions.IsTrue(&oacp, string(controlplanev1alpha3.KubeconfigAvailableCondition)) {
+			aci.Spec.ClusterMetadata != nil && aci.Spec.ClusterMetadata.AdminPasswordSecretRef != nil {
 			mcsProxySvcName := clusterDeployment.Labels[clusterv1.ClusterNameLabel] + "-" + kubevirt.MCSProxyServiceName
 			ignitionURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/config/worker",
 				mcsProxySvcName, clusterDeployment.Namespace, kubevirt.MCSProxyPort)
@@ -421,20 +429,6 @@ func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
 	return nil
 }
 
-// Returns release image from OpenshiftAssistedControlPlane. It will compute it starting from Spec.DistributionVersion and
-// possibly cluster.x-k8s.io/release-image-repository-override annotation.
-// Expected patterns:
-// quay.io/openshift-release-dev/ocp-release:4.17.0-rc.2-x86_64
-// quay.io/okd/scos-release:4.18.0-okd-scos.ec.1
-// Can be overridden with annotation: cluster.x-k8s.io/release-image-repository-override=quay.io/myorg/myrepo
-func getReleaseImage(oacp controlplanev1alpha3.OpenshiftAssistedControlPlane, architecture string) string {
-	releaseImageRepository, ok := oacp.Annotations[release.ReleaseImageRepositoryOverrideAnnotation]
-	if !ok {
-		releaseImageRepository = ""
-	}
-	return release.GetReleaseImage(oacp.Spec.DistributionVersion, releaseImageRepository, architecture)
-}
-
 func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, cluster *clusterv1.Cluster) int {
 	log := ctrl.LoggerFrom(ctx)
 	count := 0
@@ -450,6 +444,21 @@ func (r *ClusterDeploymentReconciler) getWorkerNodesCount(ctx context.Context, c
 	}
 	return count
 }
+
+// Returns release image from OpenshiftAssistedControlPlane. It will compute it starting from Spec.DistributionVersion and
+// possibly cluster.x-k8s.io/release-image-repository-override annotation.
+// Expected patterns:
+// quay.io/openshift-release-dev/ocp-release:4.17.0-rc.2-x86_64
+// quay.io/okd/scos-release:4.18.0-okd-scos.ec.1
+// Can be overridden with annotation: cluster.x-k8s.io/release-image-repository-override=quay.io/myorg/myrepo
+func getReleaseImage(oacp controlplanev1alpha3.OpenshiftAssistedControlPlane, architecture string) string {
+	releaseImageRepository, ok := oacp.Annotations[release.ReleaseImageRepositoryOverrideAnnotation]
+	if !ok {
+		releaseImageRepository = ""
+	}
+	return release.GetReleaseImage(oacp.Spec.DistributionVersion, releaseImageRepository, architecture)
+}
+
 
 func (r *ClusterDeploymentReconciler) updateClusterDeploymentRef(
 	ctx context.Context,
@@ -547,12 +556,26 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 		}
 		// Tenant DNS forwarder manifest - configures the tenant cluster's DNS operator
 		// to forward queries for the base domain to the infra cluster's dns-proxy.
-		// This prevents DNS loops when service CIDRs overlap between infra and tenant.
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.TenantDNSFwdConfigName})
-		// Network MTU manifest - sets reduced MTU for double-encapsulated KubeVirt environment
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.NetworkMTUConfigMapName})
-		// MCS NodePort manifest - exposes MCS on NodePort range (bypasses OVN port 22624 block)
-		additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.MCSManifestsConfigName})
+		// Only needed for pod-networking clusters where VMs are on the infra cluster network
+		// and can reach the infra DNS ClusterIP. Bridge-networking clusters resolve via
+		// standard upstream DNS and cannot reach infra ClusterIPs.
+		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.TenantDNSFwdConfigName})
+		}
+		// Network MTU manifest - sets reduced MTU for double-encapsulated KubeVirt pod networking.
+		// Bridge-networking VMs use the host network MTU directly — no double encapsulation.
+		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.NetworkMTUConfigMapName})
+		}
+		// MCS NodePort manifest - exposes MCS on NodePort range (bypasses OVN port 22624 block).
+		// Only needed for pod-networking; bridge-networking workers reach MCS via API VIP/haproxy.
+		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.MCSManifestsConfigName})
+		}
+		// Resolv fix manifest - ensures DNS works on first boot for bridge networking (BareMetal platform)
+		if len(acp.Spec.Config.APIVIPs) > 0 && len(acp.Spec.Config.IngressVIPs) > 0 {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.ResolvFixManifestsConfigMapName})
+		}
 	}
 
 	return additionalManifests
@@ -592,8 +615,14 @@ type InstallConfigOverride struct {
 func getAgentClusterInstallPlatformType(oacp controlplanev1alpha3.OpenshiftAssistedControlPlane) hiveext.PlatformType {
 	switch oacp.Spec.Config.Platform {
 	case controlplanev1alpha3.PlatformExternal, controlplanev1alpha3.PlatformKubeVirt:
-		// External/KubeVirt platforms use the External platform type.
-		// VIPs are still supported (via keepalived for bridge-network clusters).
+		// For bridge-network clusters with VIPs, use BareMetal platform type.
+		// The assisted-service doesn't support VIPs with External platform
+		// (webhooks reject both UMN=true+VIPs and UMN=false+External).
+		// BareMetal allows keepalived-managed VIPs with cluster-managed networking.
+		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
+			return hiveext.PlatformType(configv1.BareMetalPlatformType)
+		}
+		// Pod-networking clusters without VIPs use External platform type.
 		return hiveext.ExternalPlatformType
 	default:
 		// BareMetal (default): use BareMetal if VIPs are configured, None otherwise.

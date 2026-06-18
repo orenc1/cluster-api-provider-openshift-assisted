@@ -51,6 +51,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apiserver/pkg/storage/names"
+	"k8s.io/utils/ptr"
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 	"sigs.k8s.io/cluster-api/controllers/external"
 	capiutil "sigs.k8s.io/cluster-api/util"
@@ -574,6 +575,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) computeDesiredMachine(oacp *co
 
 	desiredMachine.Labels = util.ControlPlaneMachineLabelsForCluster(oacp, cluster.Name)
 
+	// Propagate watch-filter label from the Cluster so the CAPI controller
+	// (when running with --watch-filter) will reconcile child Machines.
+	if wf, ok := cluster.Labels[clusterv1.WatchLabel]; ok {
+		desiredMachine.Labels[clusterv1.WatchLabel] = wf
+	}
+
 	// We intentionally don't use the map directly to ensure we don't modify the map in OACP.
 	for k, v := range oacp.Spec.MachineTemplate.ObjectMeta.Annotations {
 		desiredMachine.Annotations[k] = v
@@ -666,6 +673,21 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 	numMachines := machines.Len()
 	desiredReplicas := int(oacp.Spec.Replicas)
 	machinesToCreate := desiredReplicas - numMachines
+
+	// Signal ControlPlaneInitialized once all control plane Machines exist.
+	// In the Assisted Installer flow, workers boot from the same InfraEnv ISO and
+	// register with the assisted-service (not the cluster's kube-apiserver), so they
+	// can be provisioned in parallel with the control plane. Setting this early
+	// ungates CAPI's MachineDeployment controller to create worker Machines immediately,
+	// enabling fully declarative day-0 cluster creation with masters + workers together.
+	if machinesToCreate <= 0 && (oacp.Status.Initialization.ControlPlaneInitialized == nil || !*oacp.Status.Initialization.ControlPlaneInitialized) {
+		log.Info("all control plane machines created, setting ControlPlaneInitialized to ungate worker provisioning")
+		oacp.Status.Initialization.ControlPlaneInitialized = ptr.To(true)
+		if err := r.Status().Update(ctx, oacp); err != nil {
+			return fmt.Errorf("failed to set ControlPlaneInitialized: %w", err)
+		}
+	}
+
 	if machinesToCreate > 0 {
 		// For KubeVirt platform, serialize machine creation to avoid a race condition
 		// where multiple VMs boot simultaneously and some fail to read their config drive.

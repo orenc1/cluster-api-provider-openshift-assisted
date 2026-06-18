@@ -38,11 +38,21 @@ update_capoa_bootstrap() {
     manager="$REGISTRY/capoa-bootstrap:$TAG" -n "$NS"
   oc patch deployment/capoa-bootstrap-controller-manager -n "$NS" --type='json' \
     -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Always"}]'
+
+  # Ensure adequate memory resources to prevent OOMKill
+  oc set resources deployment/capoa-bootstrap-controller-manager -n "$NS" \
+    --requests=cpu=100m,memory=256Mi --limits=cpu=1,memory=512Mi
+
   oc rollout status deployment/capoa-bootstrap-controller-manager -n "$NS" --timeout=60s
 
   if [ "$UPDATE_CRDS" = true ]; then
     echo "  Applying bootstrap CRDs (via kustomize for contract labels + webhook config)..."
     oc apply -k "$CAPOA_ROOT/bootstrap/config/crd/"
+    # Patch CRD webhook service namespace to match deployment namespace
+    for crd in openshiftassistedconfigs.bootstrap.cluster.x-k8s.io openshiftassistedconfigtemplates.bootstrap.cluster.x-k8s.io; do
+      oc patch crd "$crd" --type='json' \
+        -p="[{\"op\":\"replace\",\"path\":\"/spec/conversion/webhook/clientConfig/service/namespace\",\"value\":\"$NS\"}]" 2>/dev/null || true
+    done
   fi
 
   echo "  Applying RBAC..."
@@ -55,11 +65,19 @@ update_capoa_controlplane() {
     manager="$REGISTRY/capoa-controlplane:$TAG" -n "$NS"
   oc patch deployment/capoa-controlplane-controller-manager -n "$NS" --type='json' \
     -p='[{"op":"replace","path":"/spec/template/spec/containers/0/imagePullPolicy","value":"Always"}]'
+
+  # Ensure adequate memory resources to prevent OOMKill on large clusters
+  oc set resources deployment/capoa-controlplane-controller-manager -n "$NS" \
+    --requests=cpu=100m,memory=512Mi --limits=cpu=2,memory=2Gi
+
   oc rollout status deployment/capoa-controlplane-controller-manager -n "$NS" --timeout=60s
 
   if [ "$UPDATE_CRDS" = true ]; then
     echo "  Applying controlplane CRDs (via kustomize for contract labels + webhook config)..."
     oc apply -k "$CAPOA_ROOT/controlplane/config/crd/"
+    # Patch CRD webhook service namespace to match deployment namespace
+    oc patch crd openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io --type='json' \
+      -p="[{\"op\":\"replace\",\"path\":\"/spec/conversion/webhook/clientConfig/service/namespace\",\"value\":\"$NS\"}]" 2>/dev/null || true
   fi
 
   echo "  Applying RBAC..."
@@ -102,9 +120,9 @@ update_capk() {
   oc rollout restart deployment/capk-controller-manager -n "$NS"
   oc rollout status deployment/capk-controller-manager -n "$NS" --timeout=60s
 
-  if [ "$UPDATE_CRDS" = true ] && [ -d "$CAPK_ROOT/config/crd/bases" ]; then
+  if [ "$UPDATE_CRDS" = true ] && [ -d "$CAPK_ROOT/config/crd" ]; then
     echo "  Applying CAPK CRDs..."
-    oc apply -f "$CAPK_ROOT/config/crd/bases/"
+    oc kustomize "$CAPK_ROOT/config/crd" | oc apply -f -
   fi
 }
 

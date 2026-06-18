@@ -587,6 +587,42 @@ func isOpenshiftAssistedConfig(ref *clusterv1.ContractVersionedObjectReference) 
 	return ref.IsDefined() && ref.APIGroup == bootstrapv1alpha2.Group && ref.Kind == "OpenshiftAssistedConfig"
 }
 
+// isDay0WorkerState returns true when a worker machine should be treated as day-0
+// (boot from InfraEnv ISO alongside masters) rather than day-2 (wait for install complete).
+// For KubeVirt platform, workers participate in the initial installation with the Assisted
+// Installer — they boot the same ISO and register as agents before installation starts.
+// For non-KubeVirt platforms (e.g. metal3), workers added after install starts are day-2.
+func isDay0WorkerState(aci *v1beta1.AgentClusterInstall, cluster *clusterv1.Cluster) bool {
+	state := aci.Status.DebugInfo.State
+	// States where workers are always allowed (any platform):
+	// pending-for-input, insufficient, adding-hosts, or empty (not yet set)
+	if state == aimodels.ClusterStatusAddingHosts ||
+		state == aimodels.ClusterStatusPendingForInput ||
+		state == aimodels.ClusterStatusInsufficient ||
+		state == "" {
+		return true
+	}
+
+	// For KubeVirt platform only: also allow workers during "ready" and "installing" states.
+	// In the Assisted Installer flow on KubeVirt, all nodes (masters + workers) boot from
+	// the same InfraEnv ISO and register with the assisted-service together. The "ready"
+	// state means masters registered but installation hasn't started yet (waiting for workers).
+	// The "installing" state means installation is in progress and late-registering workers
+	// can still join as day-0 nodes.
+	if isKubeVirtPlatform(cluster) {
+		if state == aimodels.ClusterStatusReady || state == aimodels.ClusterStatusInstalling ||
+			state == aimodels.ClusterStatusPreparingForInstallation || state == aimodels.ClusterStatusInstallingPendingUserAction {
+			return true
+		}
+	}
+
+	return false
+}
+
+func isKubeVirtPlatform(cluster *clusterv1.Cluster) bool {
+	return cluster.Spec.InfrastructureRef.Kind == "KubevirtCluster"
+}
+
 func (r *OpenshiftAssistedConfigReconciler) reconcileAssistedResources(ctx context.Context, config *bootstrapv1alpha2.OpenshiftAssistedConfig, cluster *clusterv1.Cluster) (*aiv1beta1.InfraEnv, ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	// Get the Machine that owns this openshiftassistedconfig
@@ -623,8 +659,7 @@ func (r *OpenshiftAssistedConfigReconciler) reconcileAssistedResources(ctx conte
 	}
 
 	// if added worker after start install, will be treated as day2
-	if !capiutil.IsControlPlaneMachine(machine) &&
-		!(aci.Status.DebugInfo.State == aimodels.ClusterStatusAddingHosts || aci.Status.DebugInfo.State == aimodels.ClusterStatusPendingForInput || aci.Status.DebugInfo.State == aimodels.ClusterStatusInsufficient || aci.Status.DebugInfo.State == "") {
+	if !capiutil.IsControlPlaneMachine(machine) && !isDay0WorkerState(aci, cluster) {
 		logger.V(logutil.DebugLevel).Info("not controlplane machine and installation already started, requeuing")
 		v1beta1conditions.MarkFalse(
 			config,

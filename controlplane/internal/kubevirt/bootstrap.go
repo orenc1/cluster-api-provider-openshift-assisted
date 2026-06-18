@@ -42,7 +42,7 @@ import (
 //
 // After installation completes and all nodes run the API server, the DNS should be
 // updated to use the service ClusterIP for proper load balancing.
-func GetBootstrapPodIP(ctx context.Context, c client.Client, clusterName, namespace string) (string, error) {
+func GetBootstrapPodIP(ctx context.Context, c client.Reader, clusterName, namespace string) (string, error) {
 	agents := &aiv1beta1.AgentList{}
 	if err := c.List(ctx, agents, client.InNamespace(namespace)); err != nil {
 		return "", err

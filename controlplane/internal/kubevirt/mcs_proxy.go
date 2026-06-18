@@ -89,7 +89,7 @@ func EnsureMCSProxy(
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{{
 					Name:  "socat",
-					Image: "alpine/socat:latest",
+					Image: "docker.io/alpine/socat:latest",
 					Args: []string{
 						fmt.Sprintf("TCP-LISTEN:%d,fork,reuseaddr", MCSProxyPort),
 						fmt.Sprintf("TCP:%s-%s.%s.svc.cluster.local:%d", clusterName, "api", namespace, MCSNodePort),

@@ -339,16 +339,23 @@ func EnsureRHCOSGoldenPVC(
 		},
 	}
 
-	_ = unstructured.SetNestedMap(dv.Object, map[string]interface{}{
-		"source": sourceSpec,
-		"storage": map[string]interface{}{
-			"resources": map[string]interface{}{
-				"requests": map[string]interface{}{
-					"storage": storageSize,
-				},
+	storageSpec := map[string]interface{}{
+		"resources": map[string]interface{}{
+			"requests": map[string]interface{}{
+				"storage": storageSize,
 			},
-			"accessModes": []interface{}{"ReadWriteOnce"},
 		},
+		"accessModes": []interface{}{"ReadWriteMany"},
+		"volumeMode":  "Block",
+	}
+
+	if oacp.Spec.Config.KubeVirt != nil && oacp.Spec.Config.KubeVirt.CSIDriver != nil && oacp.Spec.Config.KubeVirt.CSIDriver.InfraStorageClass != "" {
+		storageSpec["storageClassName"] = oacp.Spec.Config.KubeVirt.CSIDriver.InfraStorageClass
+	}
+
+	_ = unstructured.SetNestedMap(dv.Object, map[string]interface{}{
+		"source":  sourceSpec,
+		"storage": storageSpec,
 	}, "spec")
 
 	if err := ctrl.SetControllerReference(oacp, dv, c.Scheme()); err != nil {
