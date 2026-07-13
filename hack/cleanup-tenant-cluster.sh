@@ -88,14 +88,63 @@ if oc get cluster.cluster.x-k8s.io "$CLUSTER_NAME" -n "$NAMESPACE" &>/dev/null; 
   sleep 10
 fi
 
-# 4. Delete remaining VMs (may survive if KubevirtMachine finalizers were removed before cleanup)
+# 4. Clean up external infra cluster resources (if infra-cluster-credentials exists)
+echo "--- Checking for external infra cluster ---"
+INFRA_KC=""
+if oc get secret infra-cluster-credentials -n "$NAMESPACE" -o jsonpath='{.data.kubeconfig}' &>/dev/null; then
+  INFRA_KC=$(oc get secret infra-cluster-credentials -n "$NAMESPACE" -o jsonpath='{.data.kubeconfig}' 2>/dev/null | base64 -d)
+fi
+if [ -n "$INFRA_KC" ]; then
+  echo "  External infra detected — cleaning up infra cluster resources"
+  INFRA_KUBECONFIG=$(mktemp)
+  echo "$INFRA_KC" > "$INFRA_KUBECONFIG"
+
+  # Delete VMs on infra cluster
+  echo "  Deleting VMs on infra cluster..."
+  oc --kubeconfig "$INFRA_KUBECONFIG" delete vm --all -n "$NAMESPACE" --wait=false 2>/dev/null || true
+  oc --kubeconfig "$INFRA_KUBECONFIG" delete vmi --all -n "$NAMESPACE" --wait=false 2>/dev/null || true
+
+  # Delete DataVolumes and PVCs on infra
+  echo "  Deleting DataVolumes and PVCs on infra cluster..."
+  oc --kubeconfig "$INFRA_KUBECONFIG" delete datavolume --all -n "$NAMESPACE" 2>/dev/null || true
+  oc --kubeconfig "$INFRA_KUBECONFIG" delete pvc --all -n "$NAMESPACE" 2>/dev/null || true
+
+  # Remove DNS operator forwarding rule on infra cluster
+  echo "  Removing DNS forwarding rule on infra cluster..."
+  INFRA_SERVERS=$(oc --kubeconfig "$INFRA_KUBECONFIG" get dns.operator.openshift.io default -o jsonpath='{.spec.servers}' 2>/dev/null || echo "[]")
+  if echo "$INFRA_SERVERS" | grep -q "$CLUSTER_NAME"; then
+    INFRA_PATCH=$(echo "$INFRA_SERVERS" | python3 -c "
+import json, sys
+servers = json.load(sys.stdin)
+filtered = [s for s in servers if not any('$CLUSTER_NAME' in z for z in s.get('zones', []))]
+print(json.dumps(filtered or None))
+")
+    if [ "$INFRA_PATCH" = "null" ]; then
+      oc --kubeconfig "$INFRA_KUBECONFIG" patch dns.operator.openshift.io default --type=json -p='[{"op":"remove","path":"/spec/servers"}]' 2>/dev/null || true
+    else
+      oc --kubeconfig "$INFRA_KUBECONFIG" patch dns.operator.openshift.io default --type=merge -p="{\"spec\":{\"servers\":$INFRA_PATCH}}" 2>/dev/null || true
+    fi
+    echo "  Infra DNS forwarding rule removed"
+  fi
+
+  # Delete the namespace on infra cluster
+  echo "  Deleting namespace on infra cluster..."
+  oc --kubeconfig "$INFRA_KUBECONFIG" delete namespace "$NAMESPACE" --timeout=60s 2>/dev/null || true
+
+  rm -f "$INFRA_KUBECONFIG"
+  echo "  External infra cleanup complete"
+else
+  echo "  No external infra detected (same-cluster mode)"
+fi
+
+# 5. Delete remaining VMs (may survive if KubevirtMachine finalizers were removed before cleanup)
 echo "--- Cleaning up remaining VMs and storage ---"
 oc delete vm --all -n "$NAMESPACE" --wait=false 2>/dev/null || true
 oc delete vmi --all -n "$NAMESPACE" --wait=false 2>/dev/null || true
 oc delete datavolume --all -n "$NAMESPACE" 2>/dev/null || true
 oc delete pvc -l '!cdi.kubevirt.io/storage.import.importPvcName' -n "$NAMESPACE" 2>/dev/null || true
 
-# 5. Remove DNS operator forwarding rule for this tenant
+# 6. Remove DNS operator forwarding rule for this tenant (management cluster)
 echo "--- Removing DNS operator forwarding rule ---"
 SERVERS_JSON=$(oc get dns.operator.openshift.io default -o jsonpath='{.spec.servers}' 2>/dev/null || echo "[]")
 if echo "$SERVERS_JSON" | grep -q "$CLUSTER_NAME"; then
@@ -115,15 +164,15 @@ else
   echo "  No DNS forwarding rule found for $CLUSTER_NAME"
 fi
 
-# 6. Delete tenant-dns namespace (created by CAPOA for DNS proxy)
+# 7. Delete tenant-dns namespace (created by CAPOA for DNS proxy - legacy, now uses VM namespace)
 echo "--- Deleting tenant-dns namespace (if exists) ---"
 oc delete namespace tenant-dns --wait=false 2>/dev/null || true
 
-# 7. Delete the tenant namespace
+# 8. Delete the tenant namespace
 echo "--- Deleting namespace: $NAMESPACE ---"
 oc delete namespace "$NAMESPACE" --timeout=60s 2>/dev/null || true
 
-# 8. Final check — if namespace is stuck in Terminating, force-finalize it
+# 9. Final check — if namespace is stuck in Terminating, force-finalize it
 sleep 5
 if oc get namespace "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Terminating; then
   echo "--- Namespace stuck in Terminating — force-finalizing ---"

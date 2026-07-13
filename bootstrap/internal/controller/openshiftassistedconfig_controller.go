@@ -144,30 +144,39 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 		log.V(logutil.DebugLevel).Info("finished reconciling OpenshiftAssistedConfig")
 	}()
 
-	// Look up the owner of this openshiftassistedconfig if there is one
+	// Look up the owner of this openshiftassistedconfig if there is one.
+	// GetTypedConfigOwner only recognizes Machine/MachinePool as owners. In CAPI v1beta2,
+	// MachineSet-created configs are owned by MachineSet, so we fall through to
+	// findMachineByConfigRef for those.
 	configOwner, err := bsutil.GetTypedConfigOwner(ctx, r.Client, config)
 	if apierrors.IsNotFound(err) {
-		// Could not find the owner yet, this is not an error and will re-reconcile when the owner gets set.
 		log.V(logutil.DebugLevel).Info("config owner not found")
 		return ctrl.Result{}, nil
 	}
 	if err != nil {
 		return ctrl.Result{}, errors.Wrapf(err, "failed to get owner")
 	}
-	if configOwner == nil {
-		return ctrl.Result{}, nil
-	}
 
-	log.V(logutil.TraceLevel).Info("config owner found", "name", configOwner.GetName())
-
-	machine, err := capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
-	if err != nil {
-		log.Error(err, "cannot find machine for config", "config", config)
-		return ctrl.Result{}, err
+	// Find the Machine — either via ownerRef (Machine-owned) or configRef lookup (MachineSet-owned)
+	var machine *clusterv1.Machine
+	if configOwner != nil {
+		log.V(logutil.TraceLevel).Info("config owner found", "name", configOwner.GetName())
+		machine, err = capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
+		if err != nil {
+			log.Error(err, "cannot find machine for config", "config", config)
+			return ctrl.Result{}, err
+		}
 	}
 	if machine == nil {
-		log.V(logutil.DebugLevel).Info("waiting for machine owner to be set")
-		return ctrl.Result{}, nil
+		// MachineSet-owned configs (CAPI v1beta2): look up the Machine via configRef
+		machine, err = r.findMachineByConfigRef(ctx, config)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if machine == nil {
+			log.V(logutil.DebugLevel).Info("waiting for machine to reference this config")
+			return ctrl.Result{}, nil
+		}
 	}
 
 	if !config.DeletionTimestamp.IsZero() {
@@ -178,11 +187,21 @@ func (r *OpenshiftAssistedConfigReconciler) Reconcile(ctx context.Context, req c
 		controllerutil.AddFinalizer(config, openshiftAssistedConfigFinalizer)
 	}
 
-	cluster, err := capiutil.GetClusterByName(ctx, r.Client, configOwner.GetNamespace(), configOwner.ClusterName())
+	// Determine cluster name: from configOwner (Machine-owned) or Machine labels (MachineSet-owned)
+	var clusterName string
+	var clusterNamespace string
+	if configOwner != nil {
+		clusterName = configOwner.ClusterName()
+		clusterNamespace = configOwner.GetNamespace()
+	} else {
+		clusterName = machine.Labels[clusterv1.ClusterNameLabel]
+		clusterNamespace = machine.Namespace
+	}
+	cluster, err := capiutil.GetClusterByName(ctx, r.Client, clusterNamespace, clusterName)
 	if err != nil {
 		if errors.Cause(err) == capiutil.ErrNoCluster {
 			log.V(logutil.DebugLevel).
-				Info(fmt.Sprintf("%s does not belong to a cluster yet, waiting until it's part of a cluster", configOwner.GetKind()))
+				Info("config does not belong to a cluster yet, waiting until it's part of a cluster")
 			return ctrl.Result{}, nil
 		}
 
@@ -619,17 +638,41 @@ func isDay0WorkerState(aci *v1beta1.AgentClusterInstall, cluster *clusterv1.Clus
 	return false
 }
 
+// findMachineByConfigRef looks up the Machine that references this config via
+// spec.bootstrap.configRef. This handles CAPI v1beta2 where MachineSet-created
+// configs are owned by the MachineSet, not the Machine.
+func (r *OpenshiftAssistedConfigReconciler) findMachineByConfigRef(ctx context.Context, config *bootstrapv1alpha2.OpenshiftAssistedConfig) (*clusterv1.Machine, error) {
+	machineList := &clusterv1.MachineList{}
+	if err := r.List(ctx, machineList, client.InNamespace(config.Namespace)); err != nil {
+		return nil, err
+	}
+	for i := range machineList.Items {
+		m := &machineList.Items[i]
+		if m.Spec.Bootstrap.ConfigRef.Name == config.Name {
+			return m, nil
+		}
+	}
+	return nil, nil
+}
+
 func isKubeVirtPlatform(cluster *clusterv1.Cluster) bool {
 	return cluster.Spec.InfrastructureRef.Kind == "KubevirtCluster"
 }
 
 func (r *OpenshiftAssistedConfigReconciler) reconcileAssistedResources(ctx context.Context, config *bootstrapv1alpha2.OpenshiftAssistedConfig, cluster *clusterv1.Cluster) (*aiv1beta1.InfraEnv, ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	// Get the Machine that owns this openshiftassistedconfig
+	// Get the Machine that owns this openshiftassistedconfig.
+	// In CAPI v1beta2, MachineSet-created configs may not have Machine as owner.
 	machine, err := capiutil.GetOwnerMachine(ctx, r.Client, config.ObjectMeta)
 	if err != nil {
 		logger.Error(err, "could not get machine associated with openshiftassistedconfig", "name", config.Name)
 		return nil, ctrl.Result{}, err
+	}
+	if machine == nil {
+		machine, err = r.findMachineByConfigRef(ctx, config)
+		if err != nil {
+			return nil, ctrl.Result{}, err
+		}
 	}
 
 	clusterDeployment, err := r.getClusterDeployment(ctx, cluster.GetName())

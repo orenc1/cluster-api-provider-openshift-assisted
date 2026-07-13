@@ -102,7 +102,7 @@ func EnsureMCSProxy(
 				}},
 			},
 		}
-		return controllerutil.SetOwnerReference(oacp, deploy, c.Scheme())
+		if deploy.Namespace == oacp.Namespace { return controllerutil.SetOwnerReference(oacp, deploy, c.Scheme()) }; return nil
 	}); err != nil {
 		return "", fmt.Errorf("failed to ensure MCS proxy deployment: %w", err)
 	}
@@ -127,7 +127,7 @@ func EnsureMCSProxy(
 			TargetPort: intstr.FromInt(MCSProxyPort),
 			Protocol:   corev1.ProtocolTCP,
 		}}
-		return controllerutil.SetOwnerReference(oacp, svc, c.Scheme())
+		if svc.Namespace == oacp.Namespace { return controllerutil.SetOwnerReference(oacp, svc, c.Scheme()) }; return nil
 	}); err != nil {
 		return "", fmt.Errorf("failed to ensure MCS proxy service: %w", err)
 	}

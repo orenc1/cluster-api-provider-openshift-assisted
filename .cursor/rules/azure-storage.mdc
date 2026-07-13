@@ -1,0 +1,13 @@
+---
+description: Azure cluster storage constraints
+alwaysApply: true
+---
+
+# Azure Cluster Storage
+
+When deploying on Azure clusters, always use **ReadWriteOnce (RWO)** PVCs, never ReadWriteMany (RWX). Azure managed disks do not support RWX access mode.
+
+This applies to:
+- Golden RHCOS PVCs/DataVolumes
+- VM root disk DataVolumeTemplates
+- Any PVC created in tenant cluster manifests targeting Azure

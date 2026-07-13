@@ -165,7 +165,10 @@ func EnsureExternalAccessServices(
 			}
 		}
 		apiSvc.Spec.Ports = ports
-		return controllerutil.SetOwnerReference(oacp, apiSvc, c.Scheme())
+		if apiSvc.Namespace == oacp.Namespace {
+			return controllerutil.SetOwnerReference(oacp, apiSvc, c.Scheme())
+		}
+		return nil
 	}); err != nil {
 		return nil, fmt.Errorf("failed to ensure API service: %w", err)
 	}
@@ -207,7 +210,10 @@ func EnsureExternalAccessServices(
 					Protocol:   corev1.ProtocolTCP,
 				},
 			}
-			return controllerutil.SetOwnerReference(oacp, ingressSvc, c.Scheme())
+			if ingressSvc.Namespace == oacp.Namespace {
+				return controllerutil.SetOwnerReference(oacp, ingressSvc, c.Scheme())
+			}
+			return nil
 		}); err != nil {
 			return nil, fmt.Errorf("failed to ensure Ingress service: %w", err)
 		}

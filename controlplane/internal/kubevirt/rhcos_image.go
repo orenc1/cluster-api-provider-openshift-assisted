@@ -220,9 +220,11 @@ func GoldenPVCName(openshiftVersion string) string {
 func EnsureRHCOSGoldenPVC(
 	ctx context.Context,
 	c client.Client,
+	infraClient client.Client,
 	oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane,
 	releaseImage string,
 	pullSecretName string,
+	infraNamespace string,
 ) (bool, error) {
 	log := ctrl.LoggerFrom(ctx)
 
@@ -236,7 +238,7 @@ func EnsureRHCOSGoldenPVC(
 	}
 
 	dvName := GoldenPVCName(oacp.Spec.DistributionVersion)
-	namespace := oacp.Namespace
+	namespace := infraNamespace
 
 	storageSize := RHCOSGoldenPVCDefaultSize
 	if oacp.Spec.Config.KubeVirt != nil && oacp.Spec.Config.KubeVirt.RHCOSGoldenPVCSize != "" {
@@ -248,7 +250,7 @@ func EnsureRHCOSGoldenPVC(
 	// Phase 1: Ensure the Job that pushes kubevirt ociarchive to internal registry
 	jobName := RHCOSGoldenPVCJobNamePrefix + majorMinor
 	existingJob := &batchv1.Job{}
-	err := c.Get(ctx, client.ObjectKey{Name: jobName, Namespace: namespace}, existingJob)
+	err := infraClient.Get(ctx, client.ObjectKey{Name: jobName, Namespace: namespace}, existingJob)
 	if err != nil && !errors.IsNotFound(err) {
 		return false, fmt.Errorf("failed to check golden PVC import Job: %w", err)
 	}
@@ -259,7 +261,7 @@ func EnsureRHCOSGoldenPVC(
 			jobCompleted = true
 		} else if existingJob.Status.Failed > 0 {
 			log.Info("golden PVC import Job failed, deleting for retry", "job", jobName)
-			_ = c.Delete(ctx, existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			_ = infraClient.Delete(ctx, existingJob, client.PropagationPolicy(metav1.DeletePropagationBackground))
 			return false, nil
 		} else {
 			log.V(1).Info("golden PVC import Job still running", "job", jobName)
@@ -269,16 +271,16 @@ func EnsureRHCOSGoldenPVC(
 
 	if !jobCompleted {
 		// Ensure the Job's ServiceAccount exists and has permissions to push to the internal registry
-		if err := ensureJobServiceAccountRBAC(ctx, c, namespace); err != nil {
+		if err := EnsureJobServiceAccountRBAC(ctx, infraClient, namespace); err != nil {
 			return false, fmt.Errorf("failed to ensure Job SA RBAC: %w", err)
 		}
 
 		// Create the Job that downloads the kubevirt ociarchive and pushes to internal registry
 		job := buildGoldenPVCImportJob(jobName, namespace, releaseImage, internalImageRef, pullSecretName)
-		if err := ctrl.SetControllerReference(oacp, job, c.Scheme()); err != nil {
-			return false, fmt.Errorf("failed to set owner reference on golden PVC import Job: %w", err)
+		job.Labels = map[string]string{
+			"capoa.openshift.io/cluster-name": oacp.Name,
 		}
-		if err := c.Create(ctx, job); err != nil {
+		if err := infraClient.Create(ctx, job); err != nil {
 			if errors.IsAlreadyExists(err) {
 				return false, nil
 			}
@@ -289,7 +291,7 @@ func EnsureRHCOSGoldenPVC(
 	}
 
 	// Ensure the internal registry credentials secret exists for CDI
-	if err := ensureInternalRegistrySecret(ctx, c, namespace); err != nil {
+	if err := ensureInternalRegistrySecret(ctx, infraClient, namespace); err != nil {
 		return false, fmt.Errorf("failed to ensure internal registry credentials: %w", err)
 	}
 
@@ -302,7 +304,7 @@ func EnsureRHCOSGoldenPVC(
 
 	existingDV := &unstructured.Unstructured{}
 	existingDV.SetGroupVersionKind(dvGVK)
-	err = c.Get(ctx, client.ObjectKey{Name: dvName, Namespace: namespace}, existingDV)
+	err = infraClient.Get(ctx, client.ObjectKey{Name: dvName, Namespace: namespace}, existingDV)
 	if err == nil {
 		phase, _, _ := unstructured.NestedString(existingDV.Object, "status", "phase")
 		if phase == "Succeeded" {
@@ -345,8 +347,8 @@ func EnsureRHCOSGoldenPVC(
 				"storage": storageSize,
 			},
 		},
-		"accessModes": []interface{}{"ReadWriteMany"},
-		"volumeMode":  "Block",
+		"accessModes": []interface{}{"ReadWriteOnce"},
+		"volumeMode":  "Filesystem",
 	}
 
 	if oacp.Spec.Config.KubeVirt != nil && oacp.Spec.Config.KubeVirt.CSIDriver != nil && oacp.Spec.Config.KubeVirt.CSIDriver.InfraStorageClass != "" {
@@ -358,11 +360,11 @@ func EnsureRHCOSGoldenPVC(
 		"storage": storageSpec,
 	}, "spec")
 
-	if err := ctrl.SetControllerReference(oacp, dv, c.Scheme()); err != nil {
-		return false, fmt.Errorf("failed to set owner reference on golden DataVolume: %w", err)
-	}
+	dv.SetLabels(map[string]string{
+		"capoa.openshift.io/cluster-name": oacp.Name,
+	})
 
-	if err := c.Create(ctx, dv); err != nil {
+	if err := infraClient.Create(ctx, dv); err != nil {
 		if errors.IsAlreadyExists(err) {
 			return false, nil
 		}
@@ -433,12 +435,12 @@ func ensureInternalRegistrySecret(ctx context.Context, c client.Client, namespac
 
 const goldenPVCJobSAName = "capoa-controlplane-manager"
 
-// ensureJobServiceAccountRBAC ensures the ServiceAccount used by the golden PVC import
+// EnsureJobServiceAccountRBAC ensures the ServiceAccount used by the golden PVC import
 // and CLI image resolution Jobs exists and has the required permissions:
 // - system:image-builder (to push to internal registry)
 // - anyuid SCC (skopeo needs it for container storage operations)
 // - configmaps access in the namespace (for CLI image resolution Job output)
-func ensureJobServiceAccountRBAC(ctx context.Context, c client.Client, namespace string) error {
+func EnsureJobServiceAccountRBAC(ctx context.Context, c client.Client, namespace string) error {
 	// Ensure ServiceAccount
 	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: goldenPVCJobSAName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error { return nil }); err != nil {

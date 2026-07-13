@@ -53,8 +53,8 @@ func EnsureKubeVirtManifests(
 	kvSpec := oacp.Spec.Config.KubeVirt
 	var refs []hiveext.ManifestsConfigMapReference
 
-	// CCM operator manifests
-	ccmManifests := GenerateCCMManifests(kvSpec, infraNamespace)
+	// CCM manifests (direct CCM deployment + bash operator for image updates)
+	ccmManifests := GenerateCCMManifests(kvSpec, infraNamespace, oseCliImage)
 	if len(ccmManifests) > 0 {
 		if err := ensureManifestsConfigMap(ctx, c, oacp, CCMManifestsConfigMapName, ccmManifests); err != nil {
 			return nil, fmt.Errorf("failed to create CCM manifests ConfigMap: %w", err)
@@ -83,6 +83,19 @@ func EnsureKubeVirtManifests(
 				return nil, fmt.Errorf("failed to create resolv fix manifests ConfigMap: %w", err)
 			}
 			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: ResolvFixManifestsConfigMapName})
+		}
+	}
+
+	// Pod-network DNS fix manifest (injected into tenant cluster).
+	// On pod networking (External platform), rebooted nodes need to resolve api-int
+	// via the infra cluster's CoreDNS (172.30.0.10) before the tenant CoreDNS starts.
+	if len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0 {
+		podNetDNSFixManifests := GeneratePodNetworkDNSFixManifests()
+		if len(podNetDNSFixManifests) > 0 {
+			if err := ensureManifestsConfigMap(ctx, c, oacp, PodNetDNSFixManifestsConfigMapName, podNetDNSFixManifests); err != nil {
+				return nil, fmt.Errorf("failed to create pod network DNS fix manifests ConfigMap: %w", err)
+			}
+			refs = append(refs, hiveext.ManifestsConfigMapReference{Name: PodNetDNSFixManifestsConfigMapName})
 		}
 	}
 

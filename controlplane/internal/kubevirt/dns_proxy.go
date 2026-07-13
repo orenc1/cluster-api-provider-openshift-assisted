@@ -63,6 +63,7 @@ func EnsureDNSProxy(
 	c client.Client,
 	oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane,
 	config *DNSProxyConfig,
+	namespace string,
 ) error {
 	if config == nil || config.APIIP == "" {
 		return nil
@@ -75,19 +76,13 @@ func EnsureDNSProxy(
 	baseDomain := oacp.Spec.Config.BaseDomain
 	fqdn := fmt.Sprintf("%s.%s", clusterName, baseDomain)
 
-	// 1. Ensure namespace
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSNamespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, c, ns, func() error { return nil }); err != nil {
-		return fmt.Errorf("failed to ensure namespace: %w", err)
-	}
-
-	// 1b. Ensure ServiceAccount with SCC annotation for OpenShift
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "tenant-dns", Namespace: TenantDNSNamespace}}
+	// 1. Ensure ServiceAccount with SCC annotation for OpenShift
+	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "tenant-dns", Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error { return nil }); err != nil {
 		return fmt.Errorf("failed to ensure service account: %w", err)
 	}
 
-	if err := ensureSCCForDNSProxy(ctx, c); err != nil {
+	if err := ensureSCCForDNSProxy(ctx, c, namespace); err != nil {
 		return fmt.Errorf("failed to ensure SCC for DNS proxy: %w", err)
 	}
 
@@ -100,7 +95,7 @@ func EnsureDNSProxy(
 		"Corefile": generateAppsCorefile(fqdn) + corefile,
 		"apps.db":  generateAppsZoneFile(fqdn, config.IngressIPs),
 	}
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSCorefileName, Namespace: TenantDNSNamespace}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSCorefileName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, cm, func() error {
 		cm.Data = cmData
 		return nil
@@ -109,7 +104,7 @@ func EnsureDNSProxy(
 	}
 
 	// 3. Deployment
-	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSDeploymentName, Namespace: TenantDNSNamespace}}
+	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSDeploymentName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, deploy, func() error {
 		labels := map[string]string{"app": "tenant-dns"}
 		deploy.Spec.Replicas = ptr.To(int32(1))
@@ -152,7 +147,7 @@ func EnsureDNSProxy(
 	}
 
 	// 4. Service
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSServiceName, Namespace: TenantDNSNamespace}}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSServiceName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, svc, func() error {
 		svc.Spec.Selector = map[string]string{"app": "tenant-dns"}
 		svc.Spec.Ports = []corev1.ServicePort{
@@ -225,7 +220,7 @@ func ensureInfraDNSForward(ctx context.Context, c client.Client, fqdn string, sv
 // ensureSCCForDNSProxy grants the tenant-dns ServiceAccount the anyuid SCC
 // via a ClusterRoleBinding. CoreDNS requires this on OpenShift because its
 // binary uses capabilities that are blocked by the restricted SCC.
-func ensureSCCForDNSProxy(ctx context.Context, c client.Client) error {
+func ensureSCCForDNSProxy(ctx context.Context, c client.Client, namespace string) error {
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "tenant-dns-anyuid",
@@ -241,7 +236,7 @@ func ensureSCCForDNSProxy(ctx context.Context, c client.Client) error {
 			{
 				Kind:      "ServiceAccount",
 				Name:      "tenant-dns",
-				Namespace: TenantDNSNamespace,
+				Namespace: namespace,
 			},
 		}
 		return nil

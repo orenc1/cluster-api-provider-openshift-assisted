@@ -24,10 +24,11 @@ import (
 
 const (
 	CCMManifestsConfigMapName      = "kubevirt-ccm-manifests"
-	CSIManifestsConfigMapName      = "kubevirt-csi-manifests"
-	NetworkMTUConfigMapName        = "kubevirt-network-mtu-manifests"
-	ResolvFixManifestsConfigMapName = "kubevirt-resolv-fix-manifests"
-	KubeVirtTenantClusterMTU       = 1300
+	CSIManifestsConfigMapName          = "kubevirt-csi-manifests"
+	NetworkMTUConfigMapName            = "kubevirt-network-mtu-manifests"
+	ResolvFixManifestsConfigMapName    = "kubevirt-resolv-fix-manifests"
+	PodNetDNSFixManifestsConfigMapName = "kubevirt-pod-net-dns-fix-manifests"
+	KubeVirtTenantClusterMTU           = 1300
 )
 
 // ManifestEntry represents a single manifest file to inject during installation.
@@ -37,9 +38,17 @@ type ManifestEntry struct {
 }
 
 // GenerateCCMManifests produces the list of manifest entries needed to deploy
-// the kubevirt-cloud-controller-manager-operator and its prerequisites on the
-// tenant cluster during installation.
-func GenerateCCMManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, infraNamespace string) []ManifestEntry {
+// the KubeVirt Cloud Controller Manager on the tenant cluster during installation.
+//
+// Instead of deploying a Go-based operator that manages the CCM, this generates
+// the CCM Deployment directly (with a placeholder image) plus a lightweight bash
+// operator that watches ClusterVersion and patches the CCM with the digest-pinned
+// image from the OCP release payload. The bash operator uses the ose-cli image
+// (already in the payload).
+//
+// The oseCliImage parameter should be resolved from the OCP release payload at
+// manifest-generation time.
+func GenerateCCMManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, infraNamespace, oseCliImage string) []ManifestEntry {
 	if kvSpec == nil || kvSpec.CloudControllerManager == nil || !kvSpec.CloudControllerManager.Enabled {
 		return nil
 	}
@@ -52,6 +61,10 @@ func GenerateCCMManifests(kvSpec *controlplanev1alpha3.KubeVirtPlatformSpec, inf
 	ns := infraNamespace
 	if kvSpec.InfraClusterNamespace != "" {
 		ns = kvSpec.InfraClusterNamespace
+	}
+
+	if oseCliImage == "" {
+		oseCliImage = "registry.redhat.io/openshift4/ose-cli:latest"
 	}
 
 	var manifests []ManifestEntry
@@ -84,63 +97,21 @@ data:
       enabled: true
       creationPollInterval: 5
       creationPollTimeout: 60
+      selectorless: true
     instancesV2:
       enabled: true
       zoneAndRegionEnabled: false
 `, ns),
 	})
 
-	// ServiceAccount for the operator
+	// ServiceAccount + RBAC for the CCM itself
 	manifests = append(manifests, ManifestEntry{
 		Filename: "03-ccm-rbac.yaml",
 		Content: `apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kubevirt-ccm-operator
+  name: kubevirt-cloud-controller-manager
   namespace: openshift-cloud-controller-manager
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kubevirt-ccm-operator
-rules:
-  - apiGroups: [""]
-    resources: ["configmaps", "secrets", "serviceaccounts", "services"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles", "clusterrolebindings"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "watch", "patch", "update"]
-  - apiGroups: [""]
-    resources: ["nodes/status"]
-    verbs: ["patch"]
-  - apiGroups: [""]
-    resources: ["services/status"]
-    verbs: ["patch", "update"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["create", "patch", "update"]
-  - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kubevirt-ccm-operator
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kubevirt-ccm-operator
-subjects:
-  - kind: ServiceAccount
-    name: kubevirt-ccm-operator
-    namespace: openshift-cloud-controller-manager
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -171,12 +142,144 @@ rules:
   - apiGroups: [""]
     resources: ["serviceaccounts/token"]
     verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: system:cloud-controller-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:cloud-controller-manager
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-cloud-controller-manager
+    namespace: openshift-cloud-controller-manager
 `,
 	})
 
-	// Operator Deployment (will in turn deploy the CCM itself)
+	// CCM Deployment (placeholder image, patched by the bash operator)
 	manifests = append(manifests, ManifestEntry{
-		Filename: "04-ccm-operator-deployment.yaml",
+		Filename: "04-ccm-deployment.yaml",
+		Content: fmt.Sprintf(`apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubevirt-cloud-controller-manager
+  namespace: openshift-cloud-controller-manager
+  labels:
+    app: kubevirt-cloud-controller-manager
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kubevirt-cloud-controller-manager
+  template:
+    metadata:
+      labels:
+        app: kubevirt-cloud-controller-manager
+    spec:
+      serviceAccountName: kubevirt-cloud-controller-manager
+      containers:
+        - name: cloud-controller-manager
+          image: quay.io/kubevirt/cloud-controller-manager:latest
+          command:
+            - /bin/kubevirt-cloud-controller-manager
+          args:
+            - --cloud-provider=kubevirt
+            - --cloud-config=/etc/cloud/cloud-config
+            - --use-service-account-credentials=true
+            - --leader-elect=true
+            - --leader-elect-resource-namespace=openshift-cloud-controller-manager
+            - --controllers=cloud-node,cloud-node-lifecycle,service-lb-controller
+            - --authentication-skip-lookup
+          resources:
+            requests:
+              cpu: 75m
+              memory: 60Mi
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/cloud
+              readOnly: true
+            - name: infra-kubeconfig
+              mountPath: /etc/kubernetes/infra-kubeconfig
+              readOnly: true
+      volumes:
+        - name: cloud-config
+          configMap:
+            name: cloud-config
+        - name: infra-kubeconfig
+          secret:
+            secretName: %s
+      tolerations:
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node.cloudprovider.kubernetes.io/uninitialized
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/master: ""
+`, credSecretName),
+	})
+
+	// Bash operator script ConfigMap
+	manifests = append(manifests, ManifestEntry{
+		Filename: "05-ccm-operator-script.yaml",
+		Content: fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubevirt-ccm-operator-script
+  namespace: openshift-cloud-controller-manager
+data:
+  operator.sh: |
+%s`, indentScript(CCMOperatorScript, 4)),
+	})
+
+	// Bash operator RBAC (needs to patch deployments and read secrets)
+	manifests = append(manifests, ManifestEntry{
+		Filename: "06-ccm-operator-rbac.yaml",
+		Content: `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-ccm-operator
+  namespace: openshift-cloud-controller-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-ccm-operator
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubevirt-ccm-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kubevirt-ccm-operator
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-ccm-operator
+    namespace: openshift-cloud-controller-manager
+`,
+	})
+
+	// Bash operator Deployment
+	manifests = append(manifests, ManifestEntry{
+		Filename: "07-ccm-operator-deployment.yaml",
 		Content: fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -197,25 +300,27 @@ spec:
       serviceAccountName: kubevirt-ccm-operator
       containers:
         - name: operator
-          image: quay.io/openshift/kubevirt-ccm-operator:latest
-          args:
-            - --namespace=openshift-cloud-controller-manager
-            - --infra-kubeconfig-secret=%s
-            - --infra-namespace=%s
-          env:
-            - name: CCM_IMAGE
-              value: quay.io/kubevirt/cloud-controller-manager:latest
+          image: %s
+          command: ["/bin/bash", "/scripts/operator.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
           resources:
             requests:
               cpu: 10m
               memory: 50Mi
+      volumes:
+        - name: scripts
+          configMap:
+            name: kubevirt-ccm-operator-script
       tolerations:
         - key: node-role.kubernetes.io/master
           operator: Exists
           effect: NoSchedule
       nodeSelector:
         node-role.kubernetes.io/master: ""
-`, credSecretName, ns),
+`, oseCliImage),
 	})
 
 	return manifests
@@ -358,8 +463,14 @@ rules:
     resources: ["volumesnapshots"]
     verbs: ["get", "list", "watch", "update", "patch"]
   - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotcontents"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -934,6 +1045,69 @@ spec:
 	}
 }
 
+// GeneratePodNetworkDNSFixManifests produces MachineConfigs that fix pod-networking
+// specific issues for KubeVirt tenant clusters:
+//
+// 1. DNS fix: Ensures /etc/resolv.conf points to 172.30.0.10 (infra CoreDNS) so that
+//    kubelet can resolve api-int and join the cluster during bootstrap.
+//
+// 2. TX checksum/TSO fix: Disables TX checksum offloading and TSO on the guest NIC.
+//    KubeVirt 1.8+ (CNV 4.22+) enables TX checksum on the k6t bridge, causing packets
+//    with CHECKSUM_PARTIAL to reach the VM. OVS inside the VM (used by OVN-Kubernetes)
+//    can't handle partial checksums on raw AF_PACKET sockets, preventing Geneve tunnel
+//    establishment and breaking nested OVN bootstrap.
+func GeneratePodNetworkDNSFixManifests() []ManifestEntry {
+	return []ManifestEntry{
+		{
+			Filename: "00-fix-dns-pod-network.yaml",
+			Content: `apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 00-fix-dns-pod-network
+  labels:
+    machineconfiguration.openshift.io/role: master
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+      - name: fix-dns-pod-network.service
+        enabled: true
+        contents: |
+          [Unit]
+          Description=Ensure infra cluster DNS is configured for pod-networking tenant nodes
+          Before=kubelet.service crio.service nodeip-configuration.service
+          After=NetworkManager-wait-online.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'echo "nameserver 172.30.0.10" > /etc/resolv.conf; echo "search cluster.local svc.cluster.local" >> /etc/resolv.conf; echo "options ndots:5" >> /etc/resolv.conf'
+
+          [Install]
+          WantedBy=multi-user.target
+      - name: nodeip-configuration.service
+        enabled: false
+        mask: true
+      - name: set-node-ip.service
+        enabled: true
+        contents: |
+          [Unit]
+          Description=Set node IP for kubelet (replaces nodeip-configuration for KubeVirt pod-network VMs)
+          Before=kubelet-dependencies.target
+          After=NetworkManager-wait-online.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'NODE_IP=$(ip -4 -o addr show enp1s0 | awk "{print \\$$4}" | cut -d/ -f1); mkdir -p /etc/systemd/system/kubelet.service.d; echo -e "[Service]\nEnvironment=\"KUBELET_NODE_IP=$${NODE_IP}\"" > /etc/systemd/system/kubelet.service.d/20-nodenet.conf; systemctl daemon-reload'
+
+          [Install]
+          RequiredBy=kubelet-dependencies.target
+`,
+		},
+	}
+}
+
 // GenerateNetworkMTUManifests produces manifests to configure the tenant cluster's
 // network MTU for KubeVirt environments.
 //
@@ -958,6 +1132,7 @@ spec:
   defaultNetwork:
     ovnKubernetesConfig:
       mtu: %d
+      genevePort: 9880
 `, KubeVirtTenantClusterMTU),
 		},
 	}

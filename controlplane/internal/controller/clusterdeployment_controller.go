@@ -170,8 +170,11 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt {
 		infraNS := ""
-		if acp.Spec.Config.KubeVirt != nil {
+		if acp.Spec.Config.KubeVirt != nil && acp.Spec.Config.KubeVirt.InfraClusterNamespace != "" {
 			infraNS = acp.Spec.Config.KubeVirt.InfraClusterNamespace
+		}
+		if infraNS == "" {
+			infraNS = acp.Namespace
 		}
 
 		// Ensure OS image is available in AgentServiceConfig for the target OCP version
@@ -188,12 +191,32 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			rhcosSource = controlplanev1alpha3.RHCOSImageSourceRegistry
 		}
 
+		// Resolve infra cluster client (used for golden PVC and DNS proxy)
+		infraResult, err := kubevirt.GetInfraClusterClient(ctx, r.Client, r.Scheme, acp.Namespace)
+		if err != nil {
+			log.Error(err, "failed to get infra cluster client")
+			return ctrl.Result{}, err
+		}
+		infraNamespace := acp.Namespace
+		if infraResult.IsRemote {
+			infraNamespace = infraResult.Namespace
+		}
+
 		if rhcosSource == controlplanev1alpha3.RHCOSImageSourceGoldenPVC {
 			goldenPullSecretName := ""
 			if acp.Spec.Config.PullSecretRef != nil {
 				goldenPullSecretName = acp.Spec.Config.PullSecretRef.Name
 			}
-			ready, err := kubevirt.EnsureRHCOSGoldenPVC(ctx, r.Client, acp, releaseImageWithDigest, goldenPullSecretName)
+
+			// Ensure pull secret exists on infra cluster for the import job
+			if infraResult.IsRemote {
+				if err := kubevirt.EnsurePullSecretOnInfra(ctx, r.Client, infraResult.Client, acp.Namespace, infraNamespace, goldenPullSecretName); err != nil {
+					log.Error(err, "failed to ensure pull secret on infra cluster")
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+				}
+			}
+
+			ready, err := kubevirt.EnsureRHCOSGoldenPVC(ctx, r.Client, infraResult.Client, acp, releaseImageWithDigest, goldenPullSecretName, infraNamespace)
 			if err != nil {
 				log.Error(err, "failed to ensure RHCOS golden PVC")
 				return ctrl.Result{}, err
@@ -214,7 +237,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 
 		// Create Services for external access (ClusterIP when using Routes, LB otherwise)
-		serviceIPs, err := kubevirt.EnsureExternalAccessServices(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace)
+		serviceIPs, err := kubevirt.EnsureExternalAccessServices(ctx, infraResult.Client, acp, clusterDeployment.Spec.ClusterName, infraNamespace)
 		if err != nil {
 			log.Error(err, "failed to create external access services")
 			return ctrl.Result{}, err
@@ -222,11 +245,10 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 		// When using Routes, create passthrough Routes and patch IngressController
 		if acp.Spec.Config.KubeVirt != nil && acp.Spec.Config.KubeVirt.ExternalAccess != nil && acp.Spec.Config.KubeVirt.ExternalAccess.UseRoutes {
-			if err := kubevirt.EnsureIngressControllerWildcardPolicy(ctx, r.Client); err != nil {
-				log.Error(err, "failed to ensure IngressController wildcard policy")
-				return ctrl.Result{}, err
+			if err := kubevirt.EnsureIngressControllerWildcardPolicy(ctx, infraResult.Client); err != nil {
+				log.V(1).Info("could not ensure IngressController wildcard policy (may require cluster-admin, assuming pre-configured)", "error", err)
 			}
-			if err := kubevirt.EnsureExternalRoutes(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
+			if err := kubevirt.EnsureExternalRoutes(ctx, infraResult.Client, acp, clusterDeployment.Spec.ClusterName, infraNamespace); err != nil {
 				log.Error(err, "failed to ensure external routes")
 				return ctrl.Result{}, err
 			}
@@ -245,7 +267,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			// Phase 2 (after installation): Switch to service ClusterIP for load balancing.
 			manifestDNSIPs = serviceIPs
 			if !kubeconfigAvailable {
-				bootstrapIP, bErr := kubevirt.GetBootstrapPodIP(ctx, r.APIReader, clusterDeployment.Spec.ClusterName, acp.Namespace)
+				bootstrapIP, bErr := kubevirt.GetBootstrapPodIP(ctx, infraResult.Client, clusterDeployment.Spec.ClusterName, infraNamespace)
 				if bErr != nil {
 					log.V(1).Info("could not resolve bootstrap pod IP, falling back to service ClusterIP", "error", bErr)
 				} else if bootstrapIP != "" {
@@ -261,34 +283,18 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				log.V(1).Info("kubeconfig available, using service ClusterIP for DNS")
 			}
 
-			// Get VM pod IPs for *.apps DNS resolution.
-			routerIPs, _ := kubevirt.GetRouterNodeIPs(ctx, r.APIReader, clusterDeployment.Spec.ClusterName, acp.Namespace)
-
-			apiIP := ""
-			if manifestDNSIPs != nil {
-				apiIP = manifestDNSIPs.APIClusterIP
-			}
-			dnsConfig := &kubevirt.DNSProxyConfig{
-				APIIP:      apiIP,
-				IngressIPs: routerIPs,
-			}
-			if err := kubevirt.EnsureDNSProxy(ctx, r.Client, acp, dnsConfig); err != nil {
-				log.Error(err, "failed to ensure DNS proxy")
-				return ctrl.Result{}, err
-			}
-
-			if len(routerIPs) == 0 && !kubeconfigAvailable {
-				log.Info("DNS proxy deployed but no VM pod IPs available yet, requeueing")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-			}
-		} else {
-			log.Info("VIPs configured, skipping DNS proxy (bridge networking)")
+			} else {
+			log.Info("VIPs configured, skipping pod-networking setup (bridge networking)")
 		}
 
 		// Resolve CLI image from the release payload (used by CSI bash operator)
 		cliPullSecretName := ""
 		if acp.Spec.Config.PullSecretRef != nil {
 			cliPullSecretName = acp.Spec.Config.PullSecretRef.Name
+		}
+		if err := kubevirt.EnsureJobServiceAccountRBAC(ctx, r.Client, acp.Namespace); err != nil {
+			log.Error(err, "failed to ensure CLI Job SA RBAC on management cluster")
+			return ctrl.Result{}, err
 		}
 		oseCliImage, err := kubevirt.ResolveCliImage(ctx, r.Client, acp, releaseImageWithDigest, cliPullSecretName)
 		if err != nil {
@@ -313,7 +319,7 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Bridge-networking workers reach MCS via the API VIP through haproxy,
 		// which is not subject to OVN's MCS firewall.
 		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
-			if _, err := kubevirt.EnsureMCSProxy(ctx, r.Client, acp, clusterDeployment.Spec.ClusterName, acp.Namespace); err != nil {
+			if _, err := kubevirt.EnsureMCSProxy(ctx, infraResult.Client, acp, clusterDeployment.Spec.ClusterName, infraNamespace); err != nil {
 				log.Error(err, "failed to ensure MCS proxy")
 				return ctrl.Result{}, err
 			}
@@ -328,7 +334,11 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, r.updateClusterDeploymentRef(ctx, clusterDeployment)
+	if err := r.updateClusterDeploymentRef(ctx, clusterDeployment); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *ClusterDeploymentReconciler) ensureAgentClusterInstall(
@@ -543,7 +553,10 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 	}
 
 	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt && acp.Spec.Config.KubeVirt != nil {
-		if acp.Spec.Config.KubeVirt.CloudControllerManager != nil && acp.Spec.Config.KubeVirt.CloudControllerManager.Enabled {
+		// CCM provides LoadBalancer services — only relevant for pod-networking clusters
+		// (no VIPs). Bridge-networking clusters use keepalived VIPs directly.
+		if acp.Spec.Config.KubeVirt.CloudControllerManager != nil && acp.Spec.Config.KubeVirt.CloudControllerManager.Enabled &&
+			(len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0) {
 			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.CCMManifestsConfigMapName})
 		}
 		if acp.Spec.Config.KubeVirt.CSIDriver != nil && acp.Spec.Config.KubeVirt.CSIDriver.Type == controlplanev1alpha3.CSIDriverKubeVirt {
@@ -561,6 +574,11 @@ func getClusterAdditionalManifestRefs(acp controlplanev1alpha3.OpenshiftAssisted
 		// standard upstream DNS and cannot reach infra ClusterIPs.
 		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
 			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.TenantDNSFwdConfigName})
+		}
+		// Pod-network DNS fix - ensures rebooted nodes can resolve api-int via infra CoreDNS.
+		// Bridge-networking nodes use host network DNS and VIPs — not needed.
+		if len(acp.Spec.Config.APIVIPs) == 0 || len(acp.Spec.Config.IngressVIPs) == 0 {
+			additionalManifests = append(additionalManifests, hiveext.ManifestsConfigMapReference{Name: kubevirt.PodNetDNSFixManifestsConfigMapName})
 		}
 		// Network MTU manifest - sets reduced MTU for double-encapsulated KubeVirt pod networking.
 		// Bridge-networking VMs use the host network MTU directly — no double encapsulation.
@@ -622,8 +640,11 @@ func getAgentClusterInstallPlatformType(oacp controlplanev1alpha3.OpenshiftAssis
 		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
 			return hiveext.PlatformType(configv1.BareMetalPlatformType)
 		}
-		// Pod-networking clusters without VIPs use External platform type.
-		return hiveext.ExternalPlatformType
+		// Pod-networking clusters without VIPs use None platform type.
+		// Using None instead of External avoids kubelet's --cloud-provider=external flag,
+		// which adds a node.cloudprovider.kubernetes.io/uninitialized taint that blocks
+		// CNO scheduling during bootstrap (CNO doesn't tolerate it, creating a deadlock).
+		return hiveext.PlatformType(configv1.NonePlatformType)
 	default:
 		// BareMetal (default): use BareMetal if VIPs are configured, None otherwise.
 		if len(oacp.Spec.Config.APIVIPs) > 0 && len(oacp.Spec.Config.IngressVIPs) > 0 {
@@ -639,9 +660,12 @@ func getExternalPlatformSpec(oacp controlplanev1alpha3.OpenshiftAssistedControlP
 	switch oacp.Spec.Config.Platform {
 	case controlplanev1alpha3.PlatformKubeVirt:
 		spec.PlatformName = "KubeVirt"
+		// CCM External mode only for pod-networking (no VIPs). Bridge-networking
+		// clusters use BareMetal platform type, not External, so this doesn't apply.
 		if oacp.Spec.Config.KubeVirt != nil &&
 			oacp.Spec.Config.KubeVirt.CloudControllerManager != nil &&
-			oacp.Spec.Config.KubeVirt.CloudControllerManager.Enabled {
+			oacp.Spec.Config.KubeVirt.CloudControllerManager.Enabled &&
+			(len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0) {
 			spec.CloudControllerManager = hiveext.CloudControllerManagerTypeExternal
 		}
 	case controlplanev1alpha3.PlatformExternal:

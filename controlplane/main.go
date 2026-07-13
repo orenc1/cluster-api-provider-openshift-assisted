@@ -22,6 +22,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
+
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/upgrade"
 	"github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/internal/workloadclient"
@@ -35,6 +42,7 @@ import (
 	aiv1beta1 "github.com/openshift/assisted-service/api/v1beta1"
 	hiveext "github.com/openshift/assisted-service/api/hiveextension/v1beta1"
 	hivev1 "github.com/openshift/hive/apis/hive/v1"
+	capiv1beta1 "sigs.k8s.io/cluster-api/api/core/v1beta1" //nolint:staticcheck
 	clusterv1 "sigs.k8s.io/cluster-api/api/core/v1beta2"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -52,6 +60,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
 
 	controlplanev1alpha2 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha2"
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
@@ -77,7 +86,9 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(controlplanev1alpha2.AddToScheme(scheme))
 	utilruntime.Must(controlplanev1alpha3.AddToScheme(scheme))
+	utilruntime.Must(capiv1beta1.AddToScheme(scheme))
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	utilruntime.Must(hivev1.AddToScheme(scheme))
 	utilruntime.Must(hiveext.AddToScheme(scheme))
 	utilruntime.Must(aiv1beta1.AddToScheme(scheme))
@@ -172,22 +183,75 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "09dff44b.cluster.x-k8s.io",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				DisableFor: []client.Object{
+					&rbacv1.Role{},
+					&rbacv1.RoleBinding{},
+					&rbacv1.ClusterRole{},
+					&rbacv1.ClusterRoleBinding{},
+					&corev1.ServiceAccount{},
+					&corev1.ConfigMap{},
+				},
+			},
+		},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+	// Register CAPI v1beta1↔v1beta2 conversion webhook so our controller can serve
+	// CRD conversions without depending on HyperShift's webhook.
+	// Use a direct (non-cached) client for CRD lookups so conversion works even
+	// before the manager's cache has synced (critical during startup).
+	directClient, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		setupLog.Error(err, "unable to create direct client for conversion webhook")
+		os.Exit(1)
+	}
+	capiv1beta1.SetAPIVersionGetter(func(gk schema.GroupKind) (string, error) {
+		// First check registered scheme versions
+		versions := mgr.GetScheme().VersionsForGroupKind(gk)
+		if gk.Group == "" && len(versions) == 0 {
+			for _, gv := range mgr.GetScheme().PrioritizedVersionsAllGroups() {
+				candidate := schema.GroupKind{Group: gv.Group, Kind: gk.Kind}
+				if vs := mgr.GetScheme().VersionsForGroupKind(candidate); len(vs) > 0 {
+					return candidate.WithVersion(vs[0].Version).GroupVersion().String(), nil
+				}
+			}
+		}
+		if len(versions) > 0 {
+			return gk.WithVersion(versions[0].Version).GroupVersion().String(), nil
+		}
+		// Fallback: look up CRD for types not in our scheme (e.g. CAPOA/CAPK types)
+		groupsToTry := []string{gk.Group}
+		if gk.Group == "" {
+			groupsToTry = []string{
+				"bootstrap.cluster.x-k8s.io",
+				"controlplane.cluster.x-k8s.io",
+				"infrastructure.cluster.x-k8s.io",
+				"cluster.x-k8s.io",
+			}
+		}
+		kindPlural := strings.ToLower(gk.Kind) + "s"
+		for _, group := range groupsToTry {
+			crdName := fmt.Sprintf("%s.%s", kindPlural, group)
+			crd := &apiextensionsv1.CustomResourceDefinition{}
+			if err := directClient.Get(context.Background(), client.ObjectKey{Name: crdName}, crd); err != nil {
+				continue
+			}
+			for _, v := range crd.Spec.Versions {
+				if v.Served {
+					return schema.GroupVersion{Group: group, Version: v.Name}.String(), nil
+				}
+			}
+		}
+		return "", fmt.Errorf("no versions registered for GroupKind %s", gk)
+	})
+	// Register the /convert handler for CAPI CRD conversion on our webhook server
+	mgr.GetWebhookServer().Register("/convert", conversion.NewWebhookHandler(mgr.GetScheme(), conversion.NewRegistry()))
+	setupLog.Info("registered CAPI CRD conversion webhook on /convert")
+
 	releaseImageRepository := containers.NewRemoteImageRepository()
 	clientGenerator := workloadclient.NewWorkloadClusterClientGenerator()
 	if err = (&controlplanecontroller.OpenshiftAssistedControlPlaneReconciler{
