@@ -184,12 +184,20 @@ func (r *OpenshiftAssistedControlPlaneReconciler) Reconcile(ctx context.Context,
 	log.V(logutil.TraceLevel).Info("validation passed")
 
 	if !cluster.Spec.ControlPlaneEndpoint.IsValid() {
-		log.Info("control plane endpoint is not valid, requeueing")
-		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 20}, nil
+		if err := r.propagateControlPlaneEndpoint(ctx, cluster); err != nil {
+			log.Info("control plane endpoint not valid, waiting for infrastructure provider", "error", err)
+		}
+		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 10}, nil
 	}
-	if !isInfrastructureProvisioned(cluster) {
-		log.Info("infrastructure not provisioned, requeueing")
-		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+	if cluster.Status.Initialization.InfrastructureProvisioned == nil || !*cluster.Status.Initialization.InfrastructureProvisioned {
+		if err := r.ensureInfrastructureProvisioned(ctx, cluster); err != nil {
+			log.V(1).Info("could not ensure infrastructureProvisioned", "error", err)
+			if !isInfrastructureProvisioned(cluster) {
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+		} else {
+			return ctrl.Result{Requeue: true}, nil
+		}
 	}
 	log.V(logutil.TraceLevel).Info("infra provisioned")
 
@@ -243,6 +251,72 @@ func isInfrastructureProvisioned(cluster *clusterv1.Cluster) bool {
 		}
 	}
 	return false
+}
+
+// ensureInfrastructureProvisioned checks if the infrastructure cluster is ready
+// and sets Cluster.status.initialization.infrastructureProvisioned. This is
+// needed because the CAPI Machine controller gates on this field, and the infra
+// provider (CAPK) may fail to set it due to CRD validation issues.
+func (r *OpenshiftAssistedControlPlaneReconciler) ensureInfrastructureProvisioned(ctx context.Context, cluster *clusterv1.Cluster) error {
+	infraRef := cluster.Spec.InfrastructureRef
+	if infraRef.Kind == "" || infraRef.Name == "" {
+		return fmt.Errorf("infrastructure ref not set")
+	}
+	infraObj := &unstructured.Unstructured{}
+	infraObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: infraRef.APIGroup, Version: "v1alpha1", Kind: infraRef.Kind,
+	})
+	if err := r.Get(ctx, types.NamespacedName{Name: infraRef.Name, Namespace: cluster.Namespace}, infraObj); err != nil {
+		return err
+	}
+	ready, _, _ := unstructured.NestedBool(infraObj.Object, "status", "ready")
+	if !ready {
+		return fmt.Errorf("infrastructure not ready")
+	}
+	trueVal := true
+	patch := client.MergeFrom(cluster.DeepCopy())
+	cluster.Status.Initialization.InfrastructureProvisioned = &trueVal
+	if err := r.Status().Patch(ctx, cluster, patch); err != nil {
+		return err
+	}
+	ctrl.LoggerFrom(ctx).Info("set Cluster infrastructureProvisioned=true")
+	return nil
+}
+
+// propagateControlPlaneEndpoint reads the controlPlaneEndpoint from the
+// infrastructure cluster object (e.g., KubevirtCluster) and copies it to the
+// CAPI Cluster spec. CAPI core does not auto-propagate this field; it is the
+// control plane provider's responsibility.
+func (r *OpenshiftAssistedControlPlaneReconciler) propagateControlPlaneEndpoint(ctx context.Context, cluster *clusterv1.Cluster) error {
+	infraRef := cluster.Spec.InfrastructureRef
+	if infraRef.Kind == "" || infraRef.Name == "" {
+		return fmt.Errorf("infrastructure ref not set on cluster")
+	}
+
+	infraObj := &unstructured.Unstructured{}
+	infraObj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   infraRef.APIGroup,
+		Version: "v1alpha1",
+		Kind:    infraRef.Kind,
+	})
+
+	if err := r.Get(ctx, types.NamespacedName{Name: infraRef.Name, Namespace: cluster.Namespace}, infraObj); err != nil {
+		return fmt.Errorf("failed to get infrastructure object: %w", err)
+	}
+
+	host, _, _ := unstructured.NestedString(infraObj.Object, "spec", "controlPlaneEndpoint", "host")
+	port, _, _ := unstructured.NestedInt64(infraObj.Object, "spec", "controlPlaneEndpoint", "port")
+	if host == "" || port == 0 {
+		return fmt.Errorf("infrastructure object has no controlPlaneEndpoint set")
+	}
+
+	cluster.Spec.ControlPlaneEndpoint.Host = host
+	cluster.Spec.ControlPlaneEndpoint.Port = int32(port)
+	if err := r.Update(ctx, cluster); err != nil {
+		return fmt.Errorf("failed to update cluster controlPlaneEndpoint: %w", err)
+	}
+	ctrl.LoggerFrom(ctx).Info("propagated controlPlaneEndpoint from infrastructure provider", "host", host, "port", port)
+	return nil
 }
 
 func getArchitectureFromBootstrapConfigs(ctx context.Context, k8sClient client.Client, oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane) (string, error) {
@@ -666,13 +740,12 @@ func (r *OpenshiftAssistedControlPlaneReconciler) reconcileReplicas(ctx context.
 				}
 			}
 
-			recovered, err := kubevirt.RecoverStaleVM(ctx, r.Client, m.Name, vmNamespace)
-			if err != nil {
-				log.Error(err, "failed to check/recover stale VM", "machine", m.Name)
-			}
-			if recovered {
-				log.V(logutil.InfoLevel).Info("triggered full recovery for VM that missed Ignition config", "machine", m.Name)
-			}
+			// Stale VM recovery is disabled during installation to prevent
+			// disrupting active installations when kubelet temporarily stops
+			// posting status (e.g., during CVO finalization with high load).
+			// TODO: Re-enable with a check that skips VMs whose Agent has
+			// progressed past the discovery phase.
+			_ = vmNamespace
 		}
 	}
 
@@ -688,7 +761,8 @@ func (r *OpenshiftAssistedControlPlaneReconciler) scaleUpControlPlane(ctx contex
 	if err != nil {
 		return nil, err
 	}
-	bootstrapConfig := r.generateOpenshiftAssistedConfig(oacp, cluster.Name, name)
+	dnsProxyIP := kubevirt.GetDNSProxyClusterIP(ctx, r.Client, oacp.Namespace)
+	bootstrapConfig := r.generateOpenshiftAssistedConfig(oacp, cluster.Name, name, dnsProxyIP)
 	_ = controllerutil.SetOwnerReference(oacp, bootstrapConfig, r.Scheme)
 	if err := r.Create(ctx, bootstrapConfig); err != nil {
 		setConditionFalse(oacp, controlplanev1alpha3.MachinesCreatedCondition, controlplanev1alpha3.BootstrapTemplateCloningFailedReason,
@@ -911,7 +985,8 @@ func (r *OpenshiftAssistedControlPlaneReconciler) createInfraMachine(ctx context
 	}, nil
 }
 
-func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfig(oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, clusterName string, name string) *bootstrapv1alpha2.OpenshiftAssistedConfig {
+
+func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfig(oacp *controlplanev1alpha3.OpenshiftAssistedControlPlane, clusterName string, name string, dnsProxyIP string) *bootstrapv1alpha2.OpenshiftAssistedConfig {
 	labels := util.ControlPlaneMachineLabelsForCluster(oacp, clusterName)
 
 	// Merge in labels from the OpenshiftAssistedControlPlane itself
@@ -945,7 +1020,7 @@ func (r *OpenshiftAssistedControlPlaneReconciler) generateOpenshiftAssistedConfi
 		sshKey := oacp.Spec.Config.SSHAuthorizedKey
 
 		if _, exists := annotations[bootstrapv1alpha2.DiscoveryIgnitionOverrideAnnotation]; !exists {
-			if override, err := kubevirt.KubeVirtDiscoveryIgnitionOverride(sshKey); err == nil && override != "" {
+			if override, err := kubevirt.KubeVirtDiscoveryIgnitionOverride(sshKey, dnsProxyIP, oacp.Spec.Config.ClusterName, oacp.Spec.Config.BaseDomain); err == nil && override != "" {
 				annotations[bootstrapv1alpha2.DiscoveryIgnitionOverrideAnnotation] = override
 			}
 		}

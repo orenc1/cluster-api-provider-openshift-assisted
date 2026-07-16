@@ -1056,11 +1056,20 @@ spec:
 //    with CHECKSUM_PARTIAL to reach the VM. OVS inside the VM (used by OVN-Kubernetes)
 //    can't handle partial checksums on raw AF_PACKET sockets, preventing Geneve tunnel
 //    establishment and breaking nested OVN bootstrap.
-func GeneratePodNetworkDNSFixManifests() []ManifestEntry {
+func GeneratePodNetworkDNSFixManifests(clusterName, baseDomain, apiClusterIP string) []ManifestEntry {
+	apiIntHostname := fmt.Sprintf("api-int.%s.%s", clusterName, baseDomain)
+	apiHostname := fmt.Sprintf("api.%s.%s", clusterName, baseDomain)
+
+	hostsEntry := ""
+	if apiClusterIP != "" {
+		hostsEntry = fmt.Sprintf(`
+            echo "%s %s %s" >> /etc/hosts; \`, apiClusterIP, apiIntHostname, apiHostname)
+	}
+
 	return []ManifestEntry{
 		{
 			Filename: "00-fix-dns-pod-network.yaml",
-			Content: `apiVersion: machineconfiguration.openshift.io/v1
+			Content: fmt.Sprintf(`apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
 metadata:
   name: 00-fix-dns-pod-network
@@ -1076,13 +1085,17 @@ spec:
         enabled: true
         contents: |
           [Unit]
-          Description=Ensure infra cluster DNS is configured for pod-networking tenant nodes
+          Description=Configure infra DNS and api-int hosts entry for pod-networking tenant nodes
           Before=kubelet.service crio.service nodeip-configuration.service
           After=NetworkManager-wait-online.service
 
           [Service]
           Type=oneshot
-          ExecStart=/bin/bash -c 'echo "nameserver 172.30.0.10" > /etc/resolv.conf; echo "search cluster.local svc.cluster.local" >> /etc/resolv.conf; echo "options ndots:5" >> /etc/resolv.conf'
+          ExecStart=/bin/bash -c '\
+            echo "nameserver 172.30.0.10" > /etc/resolv.conf; \
+            echo "search cluster.local svc.cluster.local" >> /etc/resolv.conf; \
+            echo "options ndots:5" >> /etc/resolv.conf; \%s
+            echo "DNS and hosts configuration applied"'
 
           [Install]
           WantedBy=multi-user.target
@@ -1099,11 +1112,11 @@ spec:
 
           [Service]
           Type=oneshot
-          ExecStart=/bin/bash -c 'NODE_IP=$(ip -4 -o addr show enp1s0 | awk "{print \\$$4}" | cut -d/ -f1); mkdir -p /etc/systemd/system/kubelet.service.d; echo -e "[Service]\nEnvironment=\"KUBELET_NODE_IP=$${NODE_IP}\"" > /etc/systemd/system/kubelet.service.d/20-nodenet.conf; systemctl daemon-reload'
+          ExecStart=/bin/bash -c 'NODE_IP=$(ip -4 -o addr show enp1s0 | head -1 | cut -d" " -f4 | cut -d/ -f1); mkdir -p /etc/systemd/system/kubelet.service.d; echo -e "[Service]\nEnvironment=\"KUBELET_NODE_IP=$$NODE_IP\"" > /etc/systemd/system/kubelet.service.d/20-nodenet.conf; systemctl daemon-reload'
 
           [Install]
           RequiredBy=kubelet-dependencies.target
-`,
+`, hostsEntry),
 		},
 	}
 }

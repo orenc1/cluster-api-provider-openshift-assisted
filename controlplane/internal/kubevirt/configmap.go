@@ -90,7 +90,11 @@ func EnsureKubeVirtManifests(
 	// On pod networking (External platform), rebooted nodes need to resolve api-int
 	// via the infra cluster's CoreDNS (172.30.0.10) before the tenant CoreDNS starts.
 	if len(oacp.Spec.Config.APIVIPs) == 0 || len(oacp.Spec.Config.IngressVIPs) == 0 {
-		podNetDNSFixManifests := GeneratePodNetworkDNSFixManifests()
+		apiClusterIP := ""
+		if serviceIPs != nil {
+			apiClusterIP = serviceIPs.APIClusterIP
+		}
+		podNetDNSFixManifests := GeneratePodNetworkDNSFixManifests(oacp.Spec.Config.ClusterName, oacp.Spec.Config.BaseDomain, apiClusterIP)
 		if len(podNetDNSFixManifests) > 0 {
 			if err := ensureManifestsConfigMap(ctx, c, oacp, PodNetDNSFixManifestsConfigMapName, podNetDNSFixManifests); err != nil {
 				return nil, fmt.Errorf("failed to create pod network DNS fix manifests ConfigMap: %w", err)

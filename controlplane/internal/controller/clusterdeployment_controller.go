@@ -283,7 +283,39 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				log.V(1).Info("kubeconfig available, using service ClusterIP for DNS")
 			}
 
-			} else {
+			routerIPs, _ := kubevirt.GetRouterNodeIPs(ctx, infraResult.Client, clusterDeployment.Spec.ClusterName, infraNamespace)
+
+			apiIP := ""
+			if manifestDNSIPs != nil {
+				apiIP = manifestDNSIPs.APIClusterIP
+			}
+			dnsConfig := &kubevirt.DNSProxyConfig{
+				APIIP:      apiIP,
+				IngressIPs: routerIPs,
+			}
+			if err := kubevirt.EnsureDNSProxy(ctx, infraResult.Client, acp, dnsConfig, infraNamespace); err != nil {
+				log.V(1).Info("could not ensure DNS proxy (best-effort)", "error", err)
+			}
+
+			// Add DNS forwarding rule so cluster DNS resolves api-int to the ClusterIP
+			// via the DNS proxy. This is critical for post-reboot MCS access on pod networking.
+			dnsProxyIP := kubevirt.GetDNSProxyClusterIP(ctx, infraResult.Client, infraNamespace)
+			if dnsProxyIP != "" {
+				if err := kubevirt.EnsureDNSForwardingRule(ctx, r.Client, clusterDeployment.Spec.ClusterName, acp.Spec.Config.BaseDomain, dnsProxyIP, infraNamespace); err != nil {
+					log.V(1).Info("could not ensure DNS forwarding rule (best-effort)", "error", err)
+				}
+			}
+
+			// Requeue until the DNS proxy apps zone has ingress IPs populated.
+			// The apps zone needs virt-launcher pod IPs which may not be available
+			// on the first reconcile. Without them, the assisted-service
+			// apps-domain-name-resolved-correctly validation fails.
+			if len(routerIPs) == 0 && !kubeconfigAvailable {
+				log.V(1).Info("DNS proxy apps zone has no ingress IPs yet, requeuing")
+				return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			}
+
+		} else {
 			log.Info("VIPs configured, skipping pod-networking setup (bridge networking)")
 		}
 

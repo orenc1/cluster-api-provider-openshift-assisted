@@ -222,3 +222,11 @@ func EnsureExternalAccessServices(
 
 	return ips, nil
 }
+
+func GetServiceClusterIP(c client.Client, name, namespace string) string {
+	svc := &corev1.Service{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: namespace}, svc); err != nil {
+		return ""
+	}
+	return svc.Spec.ClusterIP
+}

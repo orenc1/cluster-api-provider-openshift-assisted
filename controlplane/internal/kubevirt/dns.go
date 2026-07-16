@@ -194,7 +194,12 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
 		apiIntAnswers += fmt.Sprintf("        answer \"api-int.%s 60 IN A %s\"\n", fqdn, ip)
 	}
 
-	// *.apps is handled by a separate server block using the file plugin (see generateAppsZoneFile)
+	// *.apps is handled by a separate server block using the file plugin (see generateAppsZoneFile).
+	// The proxy is authoritative for the tenant zone - unknown subdomains get NXDOMAIN.
+	// This is important for the assisted-service DNS wildcard validation: it queries a
+	// nonsensical subdomain (e.g. zzzzz.<fqdn>) and expects NXDOMAIN. If we forwarded
+	// to upstream DNS, the infra cluster's wildcard *.apps record would catch it and the
+	// validation would fail, blocking installation.
 	return fmt.Sprintf(`%s:5353 {
     errors
     log
@@ -220,10 +225,14 @@ func generateCorefile(fqdn string, upstreamDNS string, apiIPs []string, ingressI
         rcode NOERROR
     }
 
-    forward . %s
+    template IN A {
+        match ".*"
+        rcode NXDOMAIN
+    }
+
     cache 30
 }
-`, fqdn, fqdn, escapedFQDN, apiAnswers, fqdn, escapedFQDN, apiIntAnswers, upstreamDNS)
+`, fqdn, fqdn, escapedFQDN, apiAnswers, fqdn, escapedFQDN, apiIntAnswers)
 }
 
 // generateAppsCorefile generates a separate CoreDNS server block for the *.apps

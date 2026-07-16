@@ -58,6 +58,7 @@ import (
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/conversion"
@@ -303,9 +304,61 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return ensureCRDContractLabels(ctx, mgr.GetAPIReader(), mgr.GetClient())
+	})); err != nil {
+		setupLog.Error(err, "unable to add CRD contract label runnable")
+		os.Exit(1)
+	}
+
 	setupLog.V(log.DebugLevel).Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// ensureCRDContractLabels ensures CAPI contract version labels exist on
+// provider CRDs. The CAPI conversion webhook needs these to resolve
+// which provider API version corresponds to each CAPI contract version.
+// The CAPI core controller may strip them on startup if its embedded
+// CRD templates lack the labels, so we re-apply on every CAPOA startup.
+func ensureCRDContractLabels(ctx context.Context, reader client.Reader, c client.Client) error {
+	log := ctrl.Log.WithName("crd-labels")
+
+	crdLabels := map[string]map[string]string{
+		"kubevirtclusters.infrastructure.cluster.x-k8s.io":                          {"cluster.x-k8s.io/v1beta1": "v1alpha1", "cluster.x-k8s.io/v1beta2": "v1alpha1"},
+		"kubevirtmachines.infrastructure.cluster.x-k8s.io":                          {"cluster.x-k8s.io/v1beta1": "v1alpha1", "cluster.x-k8s.io/v1beta2": "v1alpha1"},
+		"kubevirtmachinetemplates.infrastructure.cluster.x-k8s.io":                  {"cluster.x-k8s.io/v1beta1": "v1alpha1", "cluster.x-k8s.io/v1beta2": "v1alpha1"},
+		"openshiftassistedconfigs.bootstrap.cluster.x-k8s.io":                       {"cluster.x-k8s.io/v1beta1": "v1alpha2", "cluster.x-k8s.io/v1beta2": "v1alpha2"},
+		"openshiftassistedconfigtemplates.bootstrap.cluster.x-k8s.io":               {"cluster.x-k8s.io/v1beta1": "v1alpha2", "cluster.x-k8s.io/v1beta2": "v1alpha2"},
+		"openshiftassistedcontrolplanes.controlplane.cluster.x-k8s.io":              {"cluster.x-k8s.io/v1beta1": "v1alpha3", "cluster.x-k8s.io/v1beta2": "v1alpha3"},
+	}
+
+	for crdName, requiredLabels := range crdLabels {
+		crd := &apiextensionsv1.CustomResourceDefinition{}
+		if err := reader.Get(ctx, client.ObjectKey{Name: crdName}, crd); err != nil {
+			log.V(1).Info("CRD not found, skipping label check", "crd", crdName)
+			continue
+		}
+
+		needsUpdate := false
+		if crd.Labels == nil {
+			crd.Labels = make(map[string]string)
+		}
+		for k, v := range requiredLabels {
+			if crd.Labels[k] != v {
+				crd.Labels[k] = v
+				needsUpdate = true
+			}
+		}
+		if needsUpdate {
+			if err := c.Update(ctx, crd); err != nil {
+				log.Error(err, "failed to update CRD contract labels", "crd", crdName)
+			} else {
+				log.Info("ensured CAPI contract labels on CRD", "crd", crdName)
+			}
+		}
+	}
+	return nil
 }

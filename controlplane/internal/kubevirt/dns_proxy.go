@@ -18,12 +18,12 @@ package kubevirt
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	controlplanev1alpha3 "github.com/openshift-assisted/cluster-api-provider-openshift-assisted/controlplane/api/v1alpha3"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -36,7 +36,6 @@ import (
 )
 
 const (
-	TenantDNSNamespace      = "tenant-dns"
 	TenantDNSCorefileName   = "tenant-dns-corefile"
 	TenantDNSDeploymentName = "tenant-dns"
 	TenantDNSServiceName    = "tenant-dns"
@@ -45,19 +44,13 @@ const (
 
 // DNSProxyConfig holds the IPs used for DNS resolution in the tenant cluster.
 type DNSProxyConfig struct {
-	// APIIP resolves api/api-int.
-	// Phase 1: bootstrap pod IP; Phase 2: API service ClusterIP.
-	APIIP string
-	// IngressIPs resolve *.apps to VM pod IPs where the tenant router runs.
+	APIIP      string
 	IngressIPs []string
 }
 
-// EnsureDNSProxy deploys a CoreDNS-based DNS proxy on the infra cluster that
-// resolves tenant cluster domains (api, api-int, *.apps).
-//
-// The *.apps domain resolves to the VM pod IPs where the tenant router runs
-// (with hostNetwork:true). This avoids hairpin NAT issues that occur when using
-// the infra ingress ClusterIP from within the tenant cluster.
+// EnsureDNSProxy deploys a CoreDNS-based DNS proxy on port 5353 that resolves
+// tenant cluster domains (api, api-int, *.apps) to the correct ClusterIPs.
+// Uses port 5353 to avoid needing anyuid SCC (no cluster-admin required).
 func EnsureDNSProxy(
 	ctx context.Context,
 	c client.Client,
@@ -76,21 +69,8 @@ func EnsureDNSProxy(
 	baseDomain := oacp.Spec.Config.BaseDomain
 	fqdn := fmt.Sprintf("%s.%s", clusterName, baseDomain)
 
-	// 1. Ensure ServiceAccount with SCC annotation for OpenShift
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "tenant-dns", Namespace: namespace}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, c, sa, func() error { return nil }); err != nil {
-		return fmt.Errorf("failed to ensure service account: %w", err)
-	}
-
-	if err := ensureSCCForDNSProxy(ctx, c, namespace); err != nil {
-		return fmt.Errorf("failed to ensure SCC for DNS proxy: %w", err)
-	}
-
-	// 2. CoreDNS ConfigMap (Corefile + apps.db zone file for wildcard *.apps)
-	// Always include the apps server block so CoreDNS loads the file plugin from
-	// the start. The reload plugin + file plugin auto-reload handle later updates
-	// when IngressIPs become available, without requiring a pod restart.
-	corefile := generateCorefile(fqdn, "172.30.0.10", []string{config.APIIP}, config.IngressIPs)
+	// 1. CoreDNS ConfigMap
+	corefile := generateCorefile(fqdn, infraClusterDNSIP, []string{config.APIIP}, config.IngressIPs)
 	cmData := map[string]string{
 		"Corefile": generateAppsCorefile(fqdn) + corefile,
 		"apps.db":  generateAppsZoneFile(fqdn, config.IngressIPs),
@@ -103,7 +83,7 @@ func EnsureDNSProxy(
 		return fmt.Errorf("failed to ensure corefile: %w", err)
 	}
 
-	// 3. Deployment
+	// 2. Deployment (port 5353 - no SCC needed)
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSDeploymentName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, deploy, func() error {
 		labels := map[string]string{"app": "tenant-dns"}
@@ -112,10 +92,9 @@ func EnsureDNSProxy(
 		deploy.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: labels},
 			Spec: corev1.PodSpec{
-				ServiceAccountName: "tenant-dns",
 				Containers: []corev1.Container{{
 					Name:  "coredns",
-					Image: "registry.k8s.io/coredns/coredns:v1.11.1",
+					Image: "quay.io/openshift/origin-coredns:latest",
 					Args:  []string{"-conf", "/etc/coredns/Corefile"},
 					Ports: []corev1.ContainerPort{
 						{ContainerPort: int32(TenantDNSPort), Protocol: corev1.ProtocolUDP},
@@ -146,7 +125,7 @@ func EnsureDNSProxy(
 		return fmt.Errorf("failed to ensure deployment: %w", err)
 	}
 
-	// 4. Service
+	// 3. Service
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: TenantDNSServiceName, Namespace: namespace}}
 	if _, err := controllerutil.CreateOrUpdate(ctx, c, svc, func() error {
 		svc.Spec.Selector = map[string]string{"app": "tenant-dns"}
@@ -159,94 +138,84 @@ func EnsureDNSProxy(
 		return fmt.Errorf("failed to ensure service: %w", err)
 	}
 
-	// 5. Patch infra DNS operator to forward tenant domain queries
-	return ensureInfraDNSForward(ctx, c, fqdn, svc)
+	return nil
 }
 
-func ensureInfraDNSForward(ctx context.Context, c client.Client, fqdn string, svc *corev1.Service) error {
-	if err := c.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
-		return fmt.Errorf("failed to get service: %w", err)
+// GetDNSProxyClusterIP returns the ClusterIP of the DNS proxy service.
+func GetDNSProxyClusterIP(ctx context.Context, c client.Client, namespace string) string {
+	svc := &corev1.Service{}
+	if err := c.Get(ctx, client.ObjectKey{Name: TenantDNSServiceName, Namespace: namespace}, svc); err != nil {
+		return ""
 	}
-	if svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+	return svc.Spec.ClusterIP
+}
+
+// EnsureDNSForwardingRule patches the cluster DNS operator to forward queries for
+// the tenant cluster's zone to the DNS proxy service. This is needed so that VMs
+// on the pod network can resolve api-int via cluster DNS -> DNS proxy -> ClusterIP.
+func EnsureDNSForwardingRule(ctx context.Context, c client.Client, clusterName, baseDomain, dnsProxyClusterIP, namespace string) error {
+	if dnsProxyClusterIP == "" {
 		return nil
 	}
 
-	upstream := fmt.Sprintf("%s:%d", svc.Spec.ClusterIP, TenantDNSPort)
+	fqdn := fmt.Sprintf("%s.%s", clusterName, baseDomain)
+	ruleName := clusterName + "-dns"
+	upstream := fmt.Sprintf("%s:%d", dnsProxyClusterIP, TenantDNSPort)
 
-	dnsObj := &unstructured.Unstructured{}
-	dnsObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "operator.openshift.io", Version: "v1", Kind: "DNS"})
-	if err := c.Get(ctx, types.NamespacedName{Name: "default"}, dnsObj); err != nil {
-		return fmt.Errorf("failed to get DNS operator: %w", err)
+	type forwardPlugin struct {
+		Upstreams []string `json:"upstreams"`
+		Policy    string   `json:"policy,omitempty"`
+	}
+	type server struct {
+		Name          string        `json:"name"`
+		Zones         []string      `json:"zones"`
+		ForwardPlugin forwardPlugin `json:"forwardPlugin"`
+	}
+	type dnsSpec struct {
+		Servers []server `json:"servers"`
+	}
+	type dnsPatch struct {
+		Spec dnsSpec `json:"spec"`
 	}
 
-	servers, _, _ := unstructured.NestedSlice(dnsObj.Object, "spec", "servers")
-
-	for i, s := range servers {
-		serverMap, ok := s.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		name, _, _ := unstructured.NestedString(serverMap, "name")
-		if name == "tenant-domain-forwarder" {
-			upstreams, _, _ := unstructured.NestedStringSlice(serverMap, "forwardPlugin", "upstreams")
-			if len(upstreams) == 1 && upstreams[0] == upstream {
-				return nil // already configured correctly
-			}
-			serverMap["forwardPlugin"] = map[string]interface{}{
-				"upstreams": []interface{}{upstream},
-				"policy":    "Random",
-			}
-			serverMap["zones"] = []interface{}{fqdn}
-			servers[i] = serverMap
-			_ = unstructured.SetNestedSlice(dnsObj.Object, servers, "spec", "servers")
-			return c.Update(ctx, dnsObj)
-		}
+	// Get current DNS operator config to check if rule already exists
+	dnsObj := &map[string]interface{}{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "default"}, &corev1.ConfigMap{}); err != nil {
+		// Ignore - we'll just try to patch
 	}
 
-	// Not found, add new entry
-	newServer := map[string]interface{}{
-		"name":  "tenant-domain-forwarder",
-		"zones": []interface{}{fqdn},
-		"forwardPlugin": map[string]interface{}{
-			"upstreams": []interface{}{upstream},
-			"policy":    "Random",
+	patch := dnsPatch{
+		Spec: dnsSpec{
+			Servers: []server{{
+				Name:  ruleName,
+				Zones: []string{fqdn},
+				ForwardPlugin: forwardPlugin{
+					Upstreams: []string{upstream},
+				},
+			}},
 		},
 	}
-	servers = append(servers, newServer)
-	_ = unstructured.SetNestedSlice(dnsObj.Object, servers, "spec", "servers")
-	return c.Update(ctx, dnsObj)
-}
 
-// ensureSCCForDNSProxy grants the tenant-dns ServiceAccount the anyuid SCC
-// via a ClusterRoleBinding. CoreDNS requires this on OpenShift because its
-// binary uses capabilities that are blocked by the restricted SCC.
-func ensureSCCForDNSProxy(ctx context.Context, c client.Client, namespace string) error {
-	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "tenant-dns-anyuid",
-		},
+	_ = dnsObj // suppress unused
+	patchBytes, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("failed to marshal DNS forwarding patch: %w", err)
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, c, crb, func() error {
-		crb.RoleRef = rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "system:openshift:scc:anyuid",
-		}
-		crb.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      "tenant-dns",
-				Namespace: namespace,
-			},
-		}
-		return nil
+
+	// Patch dns.operator.openshift.io/default using unstructured client
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "operator.openshift.io",
+		Version: "v1",
+		Kind:    "DNS",
 	})
-	return err
+	u.SetName("default")
+
+	return c.Patch(ctx, u, client.RawPatch(types.MergePatchType, patchBytes))
 }
 
 // GetRouterNodeIPs returns the pod IPs of virt-launcher pods for the cluster's
-// control plane. These VMs run the tenant router (hostNetwork:true) and should
-// be used for *.apps DNS resolution to avoid hairpin NAT.
+// control plane VMs.
 func GetRouterNodeIPs(ctx context.Context, c client.Reader, clusterName, namespace string) ([]string, error) {
 	pods := &corev1.PodList{}
 	if err := c.List(ctx, pods,
