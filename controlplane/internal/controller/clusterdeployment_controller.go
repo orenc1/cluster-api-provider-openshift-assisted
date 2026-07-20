@@ -306,13 +306,10 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				}
 			}
 
-			// Requeue until the DNS proxy apps zone has ingress IPs populated.
-			// The apps zone needs virt-launcher pod IPs which may not be available
-			// on the first reconcile. Without them, the assisted-service
-			// apps-domain-name-resolved-correctly validation fails.
+			// Log when apps zone has no ingress IPs - it will be populated on a
+			// subsequent reconcile once virt-launcher pods are running.
 			if len(routerIPs) == 0 && !kubeconfigAvailable {
-				log.V(1).Info("DNS proxy apps zone has no ingress IPs yet, requeuing")
-				return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+				log.V(1).Info("DNS proxy apps zone has no ingress IPs yet, will update on next reconcile")
 			}
 
 		} else {
@@ -368,6 +365,14 @@ func (r *ClusterDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if err := r.updateClusterDeploymentRef(ctx, clusterDeployment); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Requeue periodically during installation to update the DNS proxy apps zone
+	// with virt-launcher pod IPs once VMs are running.
+	if acp.Spec.Config.Platform == controlplanev1alpha3.PlatformKubeVirt &&
+		len(acp.Spec.Config.APIVIPs) == 0 && len(acp.Spec.Config.IngressVIPs) == 0 &&
+		!conditions.IsTrue(acp, string(controlplanev1alpha3.KubeconfigAvailableCondition)) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	return ctrl.Result{}, nil

@@ -124,6 +124,12 @@ func EnsureExternalAccessServices(
 					TargetPort: intstr.FromInt(MCSNodePort),
 					Protocol:   corev1.ProtocolTCP,
 				},
+				{
+					Name:       "mcs-http",
+					Port:       22624,
+					TargetPort: intstr.FromInt(MCSNodePort),
+					Protocol:   corev1.ProtocolTCP,
+				},
 			}
 			if useRoutes {
 				// When using Routes, the kubeconfig is rewritten to port 443.
