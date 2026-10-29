@@ -1,0 +1,17 @@
+---
+- name: Delete the tenant namespace and owned resources
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cleanup_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 3600
+
+- name: Verify that the tenant namespace is gone
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "{{ cleanup_namespace }}"
+  register: tenant_namespace
+  failed_when: tenant_namespace.resources | length != 0

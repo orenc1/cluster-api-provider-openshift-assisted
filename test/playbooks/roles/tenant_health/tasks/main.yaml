@@ -1,0 +1,65 @@
+---
+- name: Wait for the tenant ClusterVersion to become available
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ health_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: cluster_version
+  until: >-
+    cluster_version.resources[0].status.conditions |
+    selectattr('type', 'equalto', 'Available') |
+    selectattr('status', 'equalto', 'True') |
+    list | length > 0
+  retries: "{{ high_retries | int }}"
+  delay: "{{ high_delay | int }}"
+
+- name: Assert that the tenant ClusterVersion is stable
+  ansible.builtin.assert:
+    that:
+      - >-
+        cluster_version.resources[0].status.conditions |
+        selectattr('type', 'equalto', 'Progressing') |
+        selectattr('status', 'equalto', 'True') | list | length == 0
+      - >-
+        cluster_version.resources[0].status.conditions |
+        selectattr('type', 'equalto', 'Degraded') |
+        selectattr('status', 'equalto', 'True') | list | length == 0
+      - cluster_version.resources[0].status.conditions | selectattr('type', 'equalto', 'Failing') | selectattr('status', 'equalto', 'True') | list | length == 0
+
+- name: Read tenant ClusterOperators
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ health_kubeconfig }}"
+    api_version: config.openshift.io/v1
+    kind: ClusterOperator
+  register: cluster_operators
+
+- name: Assert that every tenant ClusterOperator is healthy
+  ansible.builtin.assert:
+    that:
+      - item.status.conditions | selectattr('type', 'equalto', 'Available') | selectattr('status', 'equalto', 'True') | list | length == 1
+      - item.status.conditions | selectattr('type', 'equalto', 'Progressing') | selectattr('status', 'equalto', 'True') | list | length == 0
+      - item.status.conditions | selectattr('type', 'equalto', 'Degraded') | selectattr('status', 'equalto', 'True') | list | length == 0
+    quiet: true
+  loop: "{{ cluster_operators.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Read tenant MachineConfigPools
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ health_kubeconfig }}"
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+  register: machine_config_pools
+
+- name: Assert that every tenant MachineConfigPool is healthy
+  ansible.builtin.assert:
+    that:
+      - item.status.conditions | selectattr('type', 'equalto', 'Updated') | selectattr('status', 'equalto', 'True') | list | length == 1
+      - item.status.conditions | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length == 1
+      - item.status.conditions | selectattr('type', 'equalto', 'Degraded') | selectattr('status', 'equalto', 'True') | list | length == 0
+      - item.status.conditions | selectattr('type', 'equalto', 'Progressing') | selectattr('status', 'equalto', 'True') | list | length == 0
+    quiet: true
+  loop: "{{ machine_config_pools.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
